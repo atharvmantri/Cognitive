@@ -1,0 +1,22 @@
+{
+  "training_date": "2026-05-14T19:57:23.352188",
+  "epochs_trained": 186,
+  "train_mse": 20.561866760253906,
+  "val_mse": 20.36297607421875,
+  "test_mse": 19.837839126586914,
+  "test_mae": 3.4963185787200928,
+  "correlation": 0.9875334956377143,
+  "model_target": "r>0.7 with self-reported focus",
+  "architecture": {
+    "input": 8,
+    "hidden1": 32,
+    "hidden2": 16,
+    "output_0_to_100": true
+  },
+  "dataset": {
+    "total": 10000,
+    "train": 8000,
+    "val": 1000,
+    "test": 1000
+  }
+}

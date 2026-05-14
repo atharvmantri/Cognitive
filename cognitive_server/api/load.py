@@ -2,7 +2,7 @@
 Cognitive Server - Load Score API
 Endpoints: GET /api/v1/load/current, GET /api/v1/load/history
 Returns CLS (Cognitive Load Score) and load state.
-Phase 1: Uses heuristic calculation; Phase 2+ swaps to TFLite model.
+Uses adaptive personalizer for self-improving predictions.
 """
 
 import os
@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException
 from cognitive_server.db import sqlite_store
 from cognitive_server.ml.features import engineer_features
 from cognitive_server.ml.inference import compute_cls_heuristic, compute_cls_model
+from cognitive_server.ml.personalizer import get_personalizer
 
 router = APIRouter(tags=["load"])
 
@@ -22,47 +23,53 @@ USE_MODEL = os.environ.get("COGNITIVE_USE_MODEL", "false").lower() == "true"
 
 
 def _classify_state(cls_score: float) -> str:
-    """Map CLS score to a named load state."""
-    if cls_score <= 20:
-        return "restorative"
-    elif cls_score <= 40:
-        return "light"
-    elif cls_score <= 60:
-        return "focused"
-    elif cls_score <= 75:
-        return "heavy"
-    elif cls_score <= 100:
-        return "overloaded"
-    return "unknown"
+    """Map CLS score to a named load state using personalizer thresholds."""
+    return get_personalizer().get_load_state(cls_score)
 
 
 def _compute_estimated_recovery(cls_score: float) -> Optional[str]:
     """Estimate when CLS will drop below 40 based on simple decay."""
     if cls_score <= 40:
         return datetime.now(timezone.utc).isoformat()
-    # Assume ~5 points per 10-minute decay
     minutes_to_recovery = (cls_score - 40) / 5.0 * 10.0
     recovery_time = datetime.now(timezone.utc) + timedelta(minutes=minutes_to_recovery)
     return recovery_time.isoformat()
 
 
-# --- Endpoints ---
-
 @router.get("/load/current", summary="Get current cognitive load",
-            description="Returns the latest CLS score, load state, 2-hour trend, and estimated recovery time.")
+             description="Returns the latest CLS score, load state, 2-hour trend, and estimated recovery time.")
 async def get_current_load():
     """Return current cognitive load score and classification."""
     try:
-        # Check for persisted model-based score first
+        personalizer = get_personalizer()
         record = await sqlite_store.get_current_load()
 
         if record and USE_MODEL:
+            # Use persisted model score + adaptive blending
             cls_score = record["cls_score"]
             confidence = record.get("confidence", 1.0)
-            state = record["load_state"]
-            source = record.get("source", "model")
+            features = record.get("features_json", {})
+            if isinstance(features, str):
+                import json
+                try:
+                    features = json.loads(features)
+                except:
+                    features = {}
+
+            heuristic_score = compute_cls_heuristic(features) if features else cls_score
+            cls_score, confidence = personalizer.compute_adaptive_score(
+                features,
+                base_heuristic_score=heuristic_score,
+                ml_score=cls_score,
+            )
+            source = "adaptive"
+        elif record:
+            # Record exists but model mode off - use record score with personalizer classification
+            cls_score = record["cls_score"]
+            confidence = record.get("confidence", 1.0)
+            source = record.get("source", "heuristic")
         else:
-            # Phase 1: Compute from recent signals using heuristic
+            # No record yet - compute from recent signals
             recent_signals = await sqlite_store.get_signals_recent(hours=0.5)
             if not recent_signals:
                 return {
@@ -74,33 +81,29 @@ async def get_current_load():
                     "message": "Collecting baseline signals. Waiting for data..."
                 }
 
-            # Engineer the 8-dim feature vector from the most recent signal window
             features = engineer_features(recent_signals)
+            cls_score = compute_cls_heuristic(features)
+            confidence = round(1.0 - (abs(cls_score - 50) / 100.0), 2)
+            source = "heuristic"
 
-            if USE_MODEL:
-                cls_score, confidence = compute_cls_model(features)
-                source = "model"
-            else:
-                cls_score = compute_cls_heuristic(features)
-                confidence = round(1.0 - (abs(cls_score - 50) / 100.0), 2)
-                source = "heuristic"
-
-            state = _classify_state(cls_score)
-
-            # Persist this computed score
             await sqlite_store.insert_load_record(
                 cls_score=cls_score,
                 confidence=confidence,
-                load_state=state,
+                load_state=personalizer.get_load_state(cls_score),
                 source=source,
                 features=features,
             )
+
+        state = personalizer.get_load_state(cls_score)
 
         # Get 2-hour trend
         trend_records = await sqlite_store.get_load_history(hours=2.0)
         trend = [r["cls_score"] for r in trend_records]
 
         recovery = _compute_estimated_recovery(cls_score)
+        
+        # Get personalization stats
+        p_stats = personalizer.get_stats()
 
         return {
             "cognitive_load_score": round(cls_score, 2),
@@ -110,6 +113,7 @@ async def get_current_load():
             "trend": trend,
             "estimated_recovery": recovery,
             "load_state_label": state.upper(),
+            "personalization": p_stats,
         }
 
     except Exception as e:

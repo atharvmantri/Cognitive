@@ -179,3 +179,27 @@ class UrgencyClassifier:
         )
 
         return count >= self.escalation_repeat_count
+
+
+async def record_feedback(feedback_type: str, details: dict):
+    """
+    Record user feedback for adaptive learning.
+
+    Feedback types:
+    - "manual_release": User manually released a held notification
+    - "auto_release_ok": Auto-release was appropriate (user didn't react)
+    - "catch_up": User released all notifications at once
+    - "state_correct": Predicted state matched observed behavior
+    """
+    from cognitive_server.ml.personalizer import get_personalizer
+
+    personalizer = get_personalizer()
+    personalizer.record_feedback(feedback_type, details)
+
+    # Also log to intervention log for audit trail
+    from cognitive_server.db import sqlite_store
+    await sqlite_store.log_intervention(
+        f"feedback_{feedback_type}",
+        details,
+        details.get("cls_at_time", 0),
+    )

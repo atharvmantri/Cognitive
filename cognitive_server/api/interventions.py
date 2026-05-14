@@ -7,7 +7,7 @@ Manages held notifications and intervention state.
 from fastapi import APIRouter, HTTPException
 
 from cognitive_server.db import sqlite_store
-from cognitive_server.interventions.engine import evaluate_interventions
+from cognitive_server.interventions.engine import evaluate_interventions, record_feedback
 from cognitive_server.interventions.urgency_classifier import UrgencyClassifier
 
 router = APIRouter(tags=["interventions"])
@@ -54,7 +54,22 @@ async def get_active_interventions():
 async def release_notification(notification_id: int):
     """Release a single held notification."""
     try:
+        # Get notification details before releasing for feedback
+        held = await sqlite_store.get_held_notifications()
+        notif = next((n for n in held if n["id"] == notification_id), None)
+
         await sqlite_store.release_notification(notification_id, reason="manual")
+
+        # Record feedback for adaptive learning
+        if notif:
+            await record_feedback("manual_release", {
+                "sender": notif["sender"],
+                "preview": notif["preview"][:100],
+                "source": notif["source"],
+                "held_duration": notif.get("held_at", ""),
+                "cls_at_time": notif.get("urgency_score", 0),
+            })
+
         return {
             "status": "released",
             "notification_id": notification_id,
@@ -72,12 +87,24 @@ async def release_notification(notification_id: int):
 async def release_all():
     """Release all currently held notifications."""
     try:
+        # Get count before releasing for feedback
+        held = await sqlite_store.get_held_notifications()
+        held_count = len(held)
+
         await sqlite_store.release_all_notifications(reason="manual_catchup")
+
+        # Record feedback for adaptive learning
+        await record_feedback("catch_up", {
+            "released_count": held_count,
+            "trigger": "keyboard_shortcut",
+        })
+
         return {
             "status": "all_released",
             "released_at": __import__("datetime").datetime.now(
                 __import__("datetime").timezone.utc
             ).isoformat(),
+            "released_count": held_count,
         }
     except Exception as e:
         raise HTTPException(
@@ -176,8 +203,8 @@ async def ingest_page_notifications(payload: dict):
 
 
 @router.get("/interventions/log",
-            summary="Get intervention log",
-            description="Retrieve the read-only intervention log for the last N entries.")
+             summary="Get intervention log",
+             description="Retrieve the read-only intervention log for the last N entries.")
 async def get_intervention_log(limit: int = 50):
     """Return recent intervention log entries for the popup UI."""
     try:
@@ -198,4 +225,32 @@ async def get_intervention_log(limit: int = 50):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve intervention log: {str(e)}",
+        )
+
+
+@router.post("/interventions/feedback",
+             summary="Submit explicit user feedback",
+             description="Users can confirm or correct predictions to improve personalization.")
+async def submit_feedback(payload: dict):
+    """
+    Receive explicit feedback from user interactions.
+    Used to improve adaptive personalization.
+    """
+    try:
+        feedback_type = payload.get("type", "")
+        details = payload.get("details", {})
+        details["explicit"] = True
+
+        from cognitive_server.interventions.engine import record_feedback
+        await record_feedback(feedback_type, details)
+
+        return {
+            "status": "recorded",
+            "feedback_type": feedback_type,
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to record feedback: {str(e)}",
         )

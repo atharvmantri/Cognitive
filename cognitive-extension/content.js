@@ -9,6 +9,10 @@
  *  - Active URL and page title
  *  - Idle time detection
  *
+ * Also handles:
+ *  - Notification interception (Gmail, Slack, Calendar)
+ *  - Intervention execution (DOM-based notification holding, draft injection)
+ *
  * All raw data is aggregated locally and sent to background.js
  * as a compact signal payload every capture cycle.
  */
@@ -64,40 +68,224 @@ let lastKnownDomain = '';
 // Cycle timer
 let captureTimer = null;
 
-// ───── Initialization ─────
+// ───── Notification Capture (Gmail/Slack/Calendar) ─────
 
-function init() {
-  console.log('[cognitive:content] Content script initialized');
+let lastNotifCapture = 0;
 
-  // Set initial URL and title
-  signalState.activeUrl = extractDomain(window.location.href);
-  signalState.activeTitle = document.title || '';
+function capturePageNotifications() {
+  const notifications = [];
 
-  // Attach event listeners
-  attachKeyboardListeners();
-  attachScrollListeners();
-  attachMouseListeners();
-  attachVisibilityListeners();
+  // Gmail
+  if (window.location.hostname.includes('mail.google.com') ||
+      window.location.hostname.includes('mail.google.')) {
+    try {
+      const gmailNotifs = document.querySelectorAll(
+        'div[aria-label*="notification"], div[role="alert"], ' +
+        'div.gb_Za[aria-label], div.gb_7d[aria-label]'
+      );
+      gmailNotifs.forEach((el) => {
+        const text = el.textContent?.trim();
+        if (text && text.length > 2) {
+          notifications.push({
+            source: 'browser',
+            sender: 'Google Mail',
+            preview: text.slice(0, 200),
+          });
+        }
+      });
+    } catch { /* Gmail DOM not available */ }
+  }
 
-  // Request initial tab info from background
-  requestTabInfo();
+  // Slack
+  if (window.location.hostname.includes('slack.com')) {
+    try {
+      const slackNotifs = document.querySelectorAll(
+        '[data-testid="notification-banner"], div.c-notification_banner, ' +
+        'div.p-notification_banner'
+      );
+      slackNotifs.forEach((el) => {
+        const text = el.textContent?.trim();
+        if (text && text.length > 2) {
+          notifications.push({
+            source: 'browser',
+            sender: 'Slack',
+            preview: text.slice(0, 200),
+          });
+        }
+      });
+    } catch { /* Slack DOM not available */ }
+  }
 
-  // Start periodic capture cycle
-  if (captureTimer) clearInterval(captureTimer);
-  captureTimer = setInterval(captureCycle, CAPTURE_INTERVAL_MS);
+  // Calendar
+  if (window.location.hostname.includes('calendar.google.com') ||
+      window.location.hostname.includes('calendar.google.')) {
+    try {
+      const calNotifs = document.querySelectorAll(
+        'div[role="alert"], div.gb_tb[aria-label*="notification"], ' +
+        'div[aria-label*="invite"], div[aria-label*="Invitation"]'
+      );
+      calNotifs.forEach((el) => {
+        const text = el.textContent?.trim();
+        if (text && text.length > 2) {
+          notifications.push({
+            source: 'browser',
+            sender: 'Google Calendar',
+            preview: text.slice(0, 200),
+          });
+        }
+      });
+    } catch { /* Calendar DOM not available */ }
+  }
 
-  // Listen for messages from background
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'GET_TAB_INFO') {
-      sendResponse({
-        tabCount: lastKnownTabCount,
-        domain: signalState.activeUrl,
-        title: signalState.activeTitle,
-        idleSeconds: signalState.idleSeconds,
+  // Generic browser notification containers
+  try {
+    const genericSelectors = [
+      '[class*="toast"]', '[class*="snack"]', '[class*="notification"]',
+      '[role="alertdialog"]', '[aria-live="assertive"]'
+    ];
+    for (const selector of genericSelectors) {
+      const elements = document.querySelectorAll(selector);
+      elements.forEach((el) => {
+        const text = el.textContent?.trim();
+        if (text && text.length > 5 && text.length < 500) {
+          const alreadyCaptured = notifications.some(
+            (n) => n.preview === text.slice(0, 200)
+          );
+          if (!alreadyCaptured) {
+            notifications.push({
+              source: 'browser',
+              sender: 'Browser',
+              preview: text.slice(0, 200),
+            });
+          }
+        }
       });
     }
-    return true;
+  } catch { /* Ignore errors scanning generic elements */ }
+
+  return notifications;
+}
+
+function sendPageNotifications() {
+  const now = Date.now();
+  if (now - lastNotifCapture < 5000) return;
+  lastNotifCapture = now;
+
+  const notifications = capturePageNotifications();
+  if (notifications.length === 0) return;
+
+  chrome.runtime.sendMessage({
+    type: 'PAGE_NOTIFICATIONS',
+    payload: {
+      notifications: notifications.map((n) => ({
+        source: n.source,
+        sender: n.sender,
+        preview: n.preview,
+      })),
+      url: window.location.href,
+      timestamp: now,
+    },
+  }).catch(() => {});
+}
+
+// ───── Intervention Handlers ─────
+
+function handleInterventionUpdate(data) {
+  const held = data.held || [];
+  const count = data.count || 0;
+
+  if (count > 0) {
+    suppressNotificationElements();
+  }
+
+  held.forEach((notif) => {
+    if (notif.source === 'gmail') {
+      handleGmailIntervention(notif);
+    } else if (notif.source === 'slack') {
+      handleSlackIntervention(notif);
+    } else if (notif.source === 'calendar') {
+      handleCalendarIntervention(notif);
+    }
   });
+}
+
+function suppressNotificationElements() {
+  // Inject global style to suppress notification popups
+  if (!document.getElementById('cognitive-notification-suppress')) {
+    const style = document.createElement('style');
+    style.id = 'cognitive-notification-suppress';
+    style.textContent = `
+      [data-cognitive-hidden],
+      .gb_Za[aria-label],
+      .gb_7d[aria-label],
+      [data-testid="notification-banner"],
+      div.c-notification_banner,
+      div.p-notification_banner {
+        display: none !important;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  // Mark existing toasts/hovercards as hidden
+  document.querySelectorAll(
+    '[class*="toast"], [class*="snack"], [class*="notification"], [role="alertdialog"]'
+  ).forEach((el) => {
+    if (!el.hasAttribute('data-cognitive-hidden')) {
+      el.setAttribute('data-cognitive-hidden', 'true');
+      el.style.display = 'none';
+    }
+  });
+}
+
+function handleGmailIntervention(notif) {
+  if (!window.location.hostname.includes('mail.google')) return;
+  try {
+    // Mark Gmail threads visually as held
+    document.querySelectorAll(
+      'table.zA tr.zA[aria-label*="unread"], tr.zA[aria-label*="Unread"]'
+    ).forEach((el) => {
+      el.style.opacity = '0.4';
+      el.style.textDecoration = 'line-through';
+      el.setAttribute('data-cognitive-held', 'true');
+    });
+  } catch { /* Gmail DOM not ready */ }
+}
+
+function handleSlackIntervention(notif) {
+  if (!window.location.hostname.includes('slack.com')) return;
+  try {
+    // Update document title to show focus mode
+    const state = notif.state || 'heavy';
+    const prefix = state === 'overloaded' ? '🟣 Overloaded' :
+                   state === 'heavy' ? '🔴 Focus Mode' : '🟡 Focused';
+    if (!document.title.startsWith(prefix)) {
+      document.title = `${prefix} | ${document.title.replace(/^🧠[^|]*\| /, '')}`;
+    }
+  } catch { /* Slack DOM not ready */ }
+}
+
+function handleCalendarIntervention(notif) {
+  if (!window.location.hostname.includes('calendar.google')) return;
+  // Calendar interventions are handled via auto-respond in interceptors/calendar.js
+  // This just marks visual indicators on invite cards
+  try {
+    document.querySelectorAll(
+      'div[aria-label*="invited"], div[data-eventid]'
+    ).forEach((el) => {
+      if (!el.querySelector('.cognitive-held-badge')) {
+        const badge = document.createElement('div');
+        badge.className = 'cognitive-held-badge';
+        badge.textContent = '🧠 Held';
+        badge.style.cssText = `
+          background: #ef4444; color: white; font-size: 10px;
+          padding: 2px 6px; border-radius: 3px; margin-left: 8px;
+          display: inline-block; vertical-align: middle;
+        `;
+        el.appendChild(badge);
+      }
+    });
+  } catch { /* Calendar DOM not ready */ }
 }
 
 // ───── Keyboard Capture ─────
@@ -397,6 +585,49 @@ function extractDomain(url) {
 }
 
 // ───── Bootstrap ─────
+
+function init() {
+  console.log('[cognitive:content] Content script initialized');
+
+  // Set initial URL and title
+  signalState.activeUrl = extractDomain(window.location.href);
+  signalState.activeTitle = document.title || '';
+
+  // Attach event listeners
+  attachKeyboardListeners();
+  attachScrollListeners();
+  attachMouseListeners();
+  attachVisibilityListeners();
+
+  // Start periodic notification capture (sends to background)
+  sendPageNotifications();
+
+  // Request initial tab info from background
+  requestTabInfo();
+
+  // Start periodic capture cycle
+  if (captureTimer) clearInterval(captureTimer);
+  captureTimer = setInterval(captureCycle, CAPTURE_INTERVAL_MS);
+
+  // Listen for messages from background
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'GET_TAB_INFO') {
+      sendResponse({
+        tabCount: lastKnownTabCount,
+        domain: signalState.activeUrl,
+        title: signalState.activeTitle,
+        idleSeconds: signalState.idleSeconds,
+      });
+    }
+
+    // Handle intervention updates from background
+    if (message.type === 'INTERVENTION_UPDATE') {
+      handleInterventionUpdate(message);
+    }
+
+    return true;
+  });
+}
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);

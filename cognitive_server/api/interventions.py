@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 from cognitive_server.db import sqlite_store
 from cognitive_server.interventions.engine import evaluate_interventions
+from cognitive_server.interventions.urgency_classifier import UrgencyClassifier
 
 router = APIRouter(tags=["interventions"])
 
@@ -82,6 +83,95 @@ async def release_all():
         raise HTTPException(
             status_code=500,
             detail=f"Failed to release all notifications: {str(e)}",
+        )
+
+
+@router.post("/interventions/page-notifications",
+             summary="Ingest page-level notifications",
+             description="Accept browser-captured notifications; hold if CLS is high and not urgent.")
+async def ingest_page_notifications(payload: dict):
+    """
+    Receive notifications captured from web page DOM.
+    Holds them if CLS > 60 and not urgent.
+    """
+    try:
+        notifications = payload.get("notifications", [])
+        source_url = payload.get("source_url", "")
+
+        if not notifications:
+            return {"status": "ignored", "message": "No notifications to process"}
+
+        # Get current CLS state
+        current = await sqlite_store.get_current_load()
+        cls_score = current["cls_score"] if current else None
+        state = current["load_state"] if current else "learning"
+
+        held_threshold = 60
+        should_hold = cls_score is not None and cls_score > held_threshold
+
+        urg_classifier = UrgencyClassifier()
+        results = []
+
+        for notif in notifications:
+            sender = notif.get("sender", "Unknown")
+            preview = notif.get("preview", "")
+
+            # Check urgency
+            urgency_result = urg_classifier.classify(sender, preview)
+            is_urgent = urgency_result["is_urgent"]
+
+            if should_hold and not is_urgent:
+                # Hold the notification
+                notif_id = await sqlite_store.insert_held_notification(
+                    source="browser",
+                    sender=sender,
+                    preview=preview,
+                    urgency_score=urgency_result["urgency_score"],
+                )
+                await sqlite_store.log_intervention(
+                    "page_notification_held",
+                    {
+                        "sender": sender,
+                        "preview": preview[:100],
+                        "source_url": source_url,
+                        "cls": cls_score,
+                    },
+                    cls_score,
+                )
+                results.append({
+                    "sender": sender,
+                    "action": "held",
+                    "id": notif_id,
+                })
+            else:
+                # Pass through (urgent or CLS below threshold)
+                await sqlite_store.log_intervention(
+                    "page_notification_passed",
+                    {
+                        "sender": sender,
+                        "preview": preview[:100],
+                        "reason": "urgent" if is_urgent else "cls_low",
+                    },
+                    cls_score or 0,
+                )
+                results.append({
+                    "sender": sender,
+                    "action": "passed",
+                    "reason": "urgent" if is_urgent else "cls_low",
+                })
+
+        return {
+            "status": "processed",
+            "cls_score": cls_score,
+            "state": state,
+            "results": results,
+            "held_count": sum(1 for r in results if r["action"] == "held"),
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process page notifications: {str(e)}",
         )
 
 

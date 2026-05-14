@@ -57,13 +57,19 @@ function startSignalPipeline() {
  * or via native messaging from desktop agent.
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  switch (message.type) {
-    case 'SIGNAL':
-      handleSignal(message.payload);
-      sendResponse({ ack: true });
-      break;
+   switch (message.type) {
+     case 'SIGNAL':
+       handleSignal(message.payload);
+       sendResponse({ ack: true });
+       break;
 
-    case 'PAUSE':
+     case 'PAGE_NOTIFICATIONS':
+       // Forward page-level notifications to server for holding
+       handlePageNotifications(message.payload);
+       sendResponse({ ack: true });
+       break;
+
+     case 'PAUSE':
       isPaused = true;
       flushSignals(); // Flush remaining before pausing
       setBadge('gray', '--');
@@ -150,6 +156,29 @@ async function flushSignals() {
     if (signalBuffer.length > SIGNAL_BUFFER_MAX * 2) {
       signalBuffer = signalBuffer.slice(-SIGNAL_BUFFER_MAX);
     }
+  }
+}
+
+// ───── Page Notification Handler ─────
+
+async function handlePageNotifications(payload) {
+  if (isPaused) return;
+
+  const { notifications, url, timestamp } = payload;
+  if (!notifications || notifications.length === 0) return;
+
+  try {
+    await fetch(`${API_BASE}/api/v1/interventions/page-notifications`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        notifications,
+        source_url: url,
+        captured_at: new Date(timestamp).toISOString(),
+      }),
+    });
+  } catch (err) {
+    console.warn('[cognitive] Page notification forwarding failed:', err.message);
   }
 }
 

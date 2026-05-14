@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+plan.md
+
+# OS
+Thumbs.db
+
+# Environment / Secrets
+.env
+.env.*
+!.env.example
+
+# Test / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Build artifacts
+cognitive-server/*.db
+cognitive-server/*.db-journal
+*.spec
+
+# Node
+node_modules/
+package-lock.json
+
+# Extension signing keys
+*.pem
+*.p12
+
+# Demo / video files
+*.mp4
+*.mov
+demo_video*

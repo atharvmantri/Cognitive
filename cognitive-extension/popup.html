@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cognitive</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-left">
+        <span class="logo">🧠</span>
+        <span class="title">Cognitive</span>
+      </div>
+      <div class="header-right" id="status-indicator">
+        <span class="status-dot" id="status-dot"></span>
+        <span class="status-text" id="status-text">Loading...</span>
+      </div>
+    </div>
+
+    <!-- Current Load Section -->
+    <div class="section">
+      <div class="section-title">Current Load</div>
+      <div class="load-display" id="load-display">
+        <div class="load-bar-container">
+          <div class="load-bar" id="load-bar"></div>
+        </div>
+        <div class="load-score" id="load-score">--</div>
+        <div class="load-state" id="load-state">Connecting...</div>
+      </div>
+    </div>
+
+    <!-- 2-Hour Trend -->
+    <div class="section">
+      <div class="section-title">2-Hour Trend</div>
+      <div class="trend-container">
+        <svg id="trend-svg" viewBox="0 0 280 80" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="trendGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#ef4444" stop-opacity="0.3"/>
+              <stop offset="100%" stop-color="#ef4444" stop-opacity="0.02"/>
+            </linearGradient>
+          </defs>
+          <path id="trend-line" d="" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path id="trend-fill" d="" fill="url(#trendGradient)"/>
+          <line id="trend-threshold" x1="0" y1="60" x2="280" y2="60" stroke="#666" stroke-width="1" stroke-dasharray="4,4" opacity="0.5"/>
+          <text id="trend-threshold-label" x="275" y="55" fill="#666" font-size="8" text-anchor="end">Heavy</text>
+        </svg>
+        <div class="trend-empty" id="trend-empty">Collecting data...</div>
+      </div>
+    </div>
+
+    <!-- Held Notifications -->
+    <div class="section" id="held-section">
+      <div class="section-title">
+        🛡️ Held Notifications
+        <span class="badge-count" id="held-count">0</span>
+      </div>
+      <div class="held-list" id="held-list">
+        <div class="held-empty">No held notifications</div>
+      </div>
+    </div>
+
+    <!-- Intervention Log -->
+    <div class="section" id="log-section">
+      <div class="section-title">📋 Recent Actions</div>
+      <div class="log-list" id="log-list">
+        <div class="log-empty">Waiting for interventions...</div>
+      </div>
+    </div>
+
+    <!-- Footer / Controls -->
+    <div class="footer">
+      <button id="btn-release" class="btn btn-primary" title="Release all held notifications (Ctrl+Shift+U)">
+        📬 Release All
+      </button>
+      <button id="btn-pause" class="btn btn-secondary" title="Pause/resume monitoring (Ctrl+Shift+P)">
+        ⏸️ Pause
+      </button>
+    </div>
+
+    <!-- Learning overlay -->
+    <div class="learning-overlay" id="learning-overlay" style="display:none;">
+      <div class="learning-content">
+        <div class="learning-icon">📡</div>
+        <div class="learning-title">Learning your patterns...</div>
+        <div class="learning-text">Cognitive is collecting baseline behavioral data to calibrate to your unique rhythms. This typically takes 24-48 hours.</div>
+        <div class="learning-progress" id="learning-progress">
+          <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+          <span id="progress-text">0%</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

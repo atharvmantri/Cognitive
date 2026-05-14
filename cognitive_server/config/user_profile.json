@@ -1,0 +1,67 @@
+{
+  "version": "1.0.0",
+  "created_at": "2026-05-14T10:00:00Z",
+
+  "cognitive_load": {
+    "thresholds": {
+      "restorative": 20,
+      "light": 40,
+      "focused": 60,
+      "heavy": 75,
+      "overloaded": 100
+    },
+    "default_state": "learning",
+    "learning_duration_hours": 48,
+    "recalibration_interval_hours": 168,
+    "recalibration_adjustment_pct": 5
+  },
+
+  "interventions": {
+    "hold_threshold": 60,
+    "release_threshold": 40,
+    "release_sustained_seconds": 300,
+    "scheduled_release_interval_minutes": 90,
+    "urgency_bypass_enabled": true,
+    "keyword_triggers": ["URGENT", "URGENT!", "PRODUCTION DOWN", "CRITICAL", "911", "ASAP", "EMERGENCY"],
+    "escalation_window_minutes": 10,
+    "escalation_repeat_count": 2
+  },
+
+  "decision_proxy": {
+    "max_options": 3,
+    "default_meeting_duration_minutes": 30,
+    "energy_prediction_window_hours": 48,
+    "deferral_templates": {
+      "deep_focus": "I'm in a deep focus block right now. I'll respond by {predicted_low_load_time}.",
+      "calendar_reschedule": "My calendar suggests {suggested_time} would work best — does that fit your schedule?",
+      "capacity_decline": "I'm at capacity today. Can this wait until {predicted_low_load_day}?"
+    }
+  },
+
+  "whitelist": {
+    "senders": [],
+    "domains": [],
+    "keywords": []
+  },
+
+  "schedule": {
+    "work_hours_start": 8,
+    "work_hours_end": 18,
+    "circadian_profile": "auto"
+  },
+
+  "privacy": {
+    "log_keystroke_content": false,
+    "log_screenshot": false,
+    "store_notification_content_hours": 48,
+    "telemetry_enabled": false
+  },
+
+  "ui": {
+    "show_badge": true,
+    "show_trend": true,
+    "end_of_day_summary_hour": 17,
+    "end_of_day_summary_only_if_loaded": true,
+    "end_of_day_summary_max_cls": 40
+  }
+}

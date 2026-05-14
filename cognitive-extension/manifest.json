@@ -1,0 +1,74 @@
+{
+  "manifest_version": 3,
+  "name": "Cognitive - Ambient Intelligence",
+  "version": "1.0.0",
+  "description": "Ambient intelligence layer that protects your attention by detecting cognitive overload and automatically deflecting interruptions.",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "storage",
+    "notifications",
+    "webRequest",
+    "webNavigation",
+    "contextMenus",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "https://*.slack.com/*",
+    "https://calendar.google.com/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-green.png",
+      "48": "icons/icon-green.png",
+      "128": "icons/icon-green.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-green.png",
+    "48": "icons/icon-green.png",
+    "128": "icons/icon-green.png"
+  },
+  "commands": {
+    "catch-up": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+U",
+        "mac": "Command+Shift+U"
+      },
+      "description": "Release all held notifications (catch up)"
+    },
+    "decision-panel": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+C",
+        "mac": "Command+Shift+C"
+      },
+      "description": "Open Cognitive decision panel"
+    },
+    "toggle-pause": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+P",
+        "mac": "Command+Shift+P"
+      },
+      "description": "Pause/resume Cognitive monitoring"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "minimum_chrome_version": "100"
+}

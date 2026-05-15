@@ -4,7 +4,7 @@ TFLite + custom binary (.clsmdl) model runtime + heuristic fallback.
 Phase 2: Supports trained model for Cognitive Load Score prediction.
 """
 
-import os, struct
+import os, struct, json
 import numpy as np
 
 
@@ -204,3 +204,13 @@ def get_model_info():
             return {"type": name.split(".")[-1], "path": path,
                     "size_kb": os.path.getsize(path) / 1024}
     return {"type": "heuristic", "path": None, "size_kb": 0}
+
+
+def get_schema():
+    """Load feature schema and normalization parameters."""
+    mdir = os.path.dirname(os.path.abspath(__file__))
+    schema_path = os.path.join(mdir, "schema.json")
+    if os.path.exists(schema_path):
+        with open(schema_path, "r") as f:
+            return json.load(f)
+    return None

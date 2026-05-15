@@ -1,11 +1,11 @@
 {
-  "training_date": "2026-05-14T19:57:23.352188",
-  "epochs_trained": 186,
-  "train_mse": 20.561866760253906,
-  "val_mse": 20.36297607421875,
-  "test_mse": 19.837839126586914,
-  "test_mae": 3.4963185787200928,
-  "correlation": 0.9875334956377143,
+  "training_date": "2026-05-15T15:44:08.655574",
+  "epochs_trained": 211,
+  "train_mse": 19.74603843688965,
+  "val_mse": 21.15410614013672,
+  "test_mse": 21.84830665588379,
+  "test_mae": 3.6287617683410645,
+  "correlation": 0.9870893035552766,
   "model_target": "r>0.7 with self-reported focus",
   "architecture": {
     "input": 8,
@@ -18,5 +18,12 @@
     "train": 8000,
     "val": 1000,
     "test": 1000
+  },
+  "models": {
+    "clsmdl": {
+      "path": "C:\\projects\\Cognitive\\cognitive_server\\ml\\model.clsmdl",
+      "size_kb": 3.30078125
+    },
+    "tflite": null
   }
 }

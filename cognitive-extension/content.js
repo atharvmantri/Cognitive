@@ -577,8 +577,8 @@ function attachKeyboardListeners() {
   document.addEventListener('keydown', (e) => {
     // Ignore modifier keys alone
     if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
-    // Ignore input in password fields or text that user types into
-    // (we only count navigation/coding keystrokes for signal purposes)
+    // Check if input is in a sensitive context (password, email, etc.)
+    if (e.target && isSensitiveInput(e.target)) return;
     // For privacy: we NEVER capture key content - only timestamps
 
     const now = Date.now();
@@ -709,17 +709,21 @@ function attachVisibilityListeners() {
 
 // ───── Tab Info ─────
 
+let tabSwitchListenerAttached = false;
+
 async function requestTabInfo() {
   try {
     const tabs = await chrome.tabs.query({ currentWindow: true });
     lastKnownTabCount = tabs.length;
 
-    // Check for tab switches in background
-    chrome.tabs.onActivated.addListener(() => {
-      lastKnownTabCount = lastKnownTabCount; // Refresh on switch
-      signalState.tabCount = lastKnownTabCount;
-      signalState.domainSwitches++;
-    });
+    // Attach tab switch listener only once
+    if (!tabSwitchListenerAttached) {
+      tabSwitchListenerAttached = true;
+      chrome.tabs.onActivated.addListener(() => {
+        signalState.tabCount = lastKnownTabCount;
+        signalState.domainSwitches++;
+      });
+    }
   } catch (err) {
     // Extension context not available
   }
@@ -780,9 +784,10 @@ function captureCycle() {
   };
 
   // Send to background script
+  const sanitized = sanitizeSignal({ ...signalState });
   chrome.runtime.sendMessage({
     type: 'SIGNAL',
-    payload: { ...signalState },
+    payload: sanitized,
   }).catch(() => {
     // Background script might not be ready
   });

@@ -110,75 +110,34 @@ async def evaluate_interventions():
         return {"action": "error", "message": str(e)}
 
 
-def _sustained_below_threshold(threshold: float, sustained_seconds: int) -> bool:
+async def _sustained_below_threshold(threshold: float, sustained_seconds: int) -> bool:
     """
     Check if CLS has been below threshold for the sustained duration.
-    Looks at recent load_history entries.
+    Looks at recent load_history entries and verifies all are below threshold.
     """
-    # This is a simplified check; in full implementation we'd query
-    # load_history for the last N minutes and verify all values are below threshold
-    import asyncio
-    return True  # Simplified for Phase 1; expanded in Phase 2
-
-
-class UrgencyClassifier:
-    """Determines if a held notification should bypass the hold based on urgency rules."""
-
-    def __init__(self, config: dict):
-        self.config = config
-        interventions_config = config.get("interventions", {})
-        self.keyword_triggers = [
-            kw.upper() for kw in interventions_config.get("keyword_triggers", [])
-        ]
-        self.whitelist_senders = set(
-            s.lower() for s in interventions_config.get("whitelist", {}).get("senders", [])
+    try:
+        history = await sqlite_store.get_load_history(
+            limit=max(20, sustained_seconds // 30),
+            hours=max(1, sustained_seconds // 3600),
         )
-        self.whitelist_domains = set(
-            d.lower() for d in interventions_config.get("whitelist", {}).get("domains", [])
-        )
-        self.escalation_window_minutes = interventions_config.get("escalation_window_minutes", 10)
-        self.escalation_repeat_count = interventions_config.get("escalation_repeat_count", 2)
-
-    async def should_bypass(self, notification: dict) -> bool:
-        """Check if a notification should bypass the hold."""
-        # 1. Whitelist sender check
-        sender = notification.get("sender", "").lower()
-        if sender in self.whitelist_senders:
-            return True
-
-        # 2. Keyword urgency detection
-        preview = notification.get("preview", "").upper()
-        for keyword in self.keyword_triggers:
-            if keyword in preview:
-                return True
-
-        # 3. Repeated contact escalation
-        if await self._is_repeated_contact(notification):
-            return True
-
-        return False
-
-    async def _is_repeated_contact(self, notification: dict) -> bool:
-        """Check if the same sender contacted multiple times within escalation window."""
-        sender = notification.get("sender", "")
-        if not sender:
+        if not history or len(history) < 2:
             return False
 
-        cutoff = (
-            datetime.fromisoformat(notification["held_at"])
-            - timedelta(minutes=self.escalation_window_minutes)
-        ).isoformat()
+        cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=sustained_seconds)
+        recent = [
+            h for h in history
+            if datetime.fromisoformat(h["timestamp"]).replace(tzinfo=timezone.utc) >= cutoff_time
+        ]
 
-        recent_notifications = await sqlite_store.get_held_notifications()
-        count = sum(
-            1
-            for n in recent_notifications
-            if n["sender"] == sender
-            and n["held_at"] >= cutoff
-            and n["id"] != notification["id"]
-        )
+        if not recent:
+            return False
 
-        return count >= self.escalation_repeat_count
+        return all(h.get("cls_score", 100) < threshold for h in recent)
+    except Exception:
+        return False
+
+
+from cognitive_server.interventions.urgency_classifier import UrgencyClassifier
 
 
 async def record_feedback(feedback_type: str, details: dict):

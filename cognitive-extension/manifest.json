@@ -9,6 +9,7 @@
     "storage",
     "notifications",
     "webRequest",
+    "webRequestBlocking",
     "webNavigation",
     "contextMenus",
     "activeTab",
@@ -26,7 +27,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["lib/privacy-guard.js", "content.js"],
       "run_at": "document_start",
       "all_frames": false
     }

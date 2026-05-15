@@ -1,0 +1,110 @@
+{
+  "name": "cognitive_load_v1",
+  "version": 1,
+  "description": "Feature schema and normalization parameters for Cognitive Load Score inference",
+  "features": [
+    {
+      "name": "kpm",
+      "description": "Keystrokes per minute",
+      "type": "float",
+      "min": 0,
+      "max": 120,
+      "normalization": "min_max",
+      "importance": 0.20
+    },
+    {
+      "name": "switch_rate",
+      "description": "Window/tab switches per minute",
+      "type": "float",
+      "min": 0,
+      "max": 30,
+      "normalization": "min_max",
+      "importance": 0.20
+    },
+    {
+      "name": "scroll_entropy",
+      "description": "Variance in scroll velocity (erratic scrolling)",
+      "type": "float",
+      "min": 0,
+      "max": 5000,
+      "normalization": "min_max",
+      "importance": 0.10
+    },
+    {
+      "name": "mouse_entropy",
+      "description": "Shannon entropy of mouse turning angles",
+      "type": "float",
+      "min": 0,
+      "max": 1,
+      "normalization": "clamp",
+      "importance": 0.10
+    },
+    {
+      "name": "idle_ratio",
+      "description": "Fraction of time with no input activity",
+      "type": "float",
+      "min": 0,
+      "max": 1,
+      "normalization": "clamp",
+      "importance": 0.15
+    },
+    {
+      "name": "tab_count",
+      "description": "Number of open browser tabs",
+      "type": "float",
+      "min": 0,
+      "max": 30,
+      "normalization": "min_max",
+      "importance": 0.10
+    },
+    {
+      "name": "domain_switches",
+      "description": "Unique domains visited in the window",
+      "type": "float",
+      "min": 0,
+      "max": 15,
+      "normalization": "min_max",
+      "importance": 0.10
+    },
+    {
+      "name": "time_of_day",
+      "description": "Sin/cos encoding of current hour",
+      "type": "float",
+      "min": -1,
+      "max": 1,
+      "normalization": "clamp",
+      "importance": 0.05
+    }
+  ],
+  "output": {
+    "name": "cls_score",
+    "description": "Cognitive Load Score",
+    "range": [0, 100],
+    "states": {
+      "restorative": [0, 20],
+      "light": [21, 40],
+      "focused": [41, 60],
+      "heavy": [61, 75],
+      "overloaded": [76, 100]
+    }
+  },
+  "architecture": {
+    "input_dim": 8,
+    "layers": [
+      {"type": "dense", "units": 32, "activation": "relu"},
+      {"type": "dropout", "rate": 0.2},
+      {"type": "dense", "units": 16, "activation": "relu"},
+      {"type": "dense", "units": 1, "activation": "sigmoid"}
+    ],
+    "output_scaling": "sigmoid * 100"
+  },
+  "training": {
+    "dataset": "synthetic_data.csv",
+    "samples": 10000,
+    "profiles": ["light_browsing", "focused_coding", "frantic_multitasking", "idle_overwhelmed", "meeting_heavy"],
+    "epochs": 300,
+    "batch_size": 32,
+    "learning_rate": 0.01,
+    "early_stopping_patience": 40
+  }
+}

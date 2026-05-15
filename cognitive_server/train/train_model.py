@@ -41,6 +41,7 @@ FEATURE_COLS = ['kpm', 'switch_rate', 'scroll_entropy', 'mouse_entropy',
                 'idle_ratio', 'tab_count', 'domain_switches', 'time_of_day']
 
 MODEL_PATH = os.path.join(REPO_ROOT, 'cognitive_server', 'ml', 'model.clsmdl')
+TFLITE_PATH = os.path.join(REPO_ROOT, 'cognitive_server', 'ml', 'model.tflite')
 METRICS_PATH = os.path.join(HERE, 'training_metrics.json')
 DATA_PATH = os.path.join(REPO_ROOT, 'cognitive_server', 'train', 'synthetic_data.csv')
 
@@ -238,6 +239,45 @@ def export_model(model, path):
     return len(data)
 
 
+def export_tflite(model, path):
+    """Export model to TFLite format using flatbuffers."""
+    try:
+        import tensorflow as tf
+
+        # Build a TensorFlow model with the same architecture
+        tf_model = tf.keras.Sequential([
+            tf.keras.layers.Dense(32, activation='relu', input_shape=(8,)),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(16, activation='relu'),
+            tf.keras.layers.Dense(1, activation='sigmoid'),
+        ])
+
+        # Set weights from trained model
+        l1_w, l1_b = model.l1.W, model.l1.b
+        l2_w, l2_b = model.l2.W, model.l2.b
+        l3_w, l3_b = model.l3.W, model.l3.b
+
+        tf_model.layers[0].set_weights([l1_w, l1_b])
+        tf_model.layers[2].set_weights([l2_w, l2_b])
+        tf_model.layers[3].set_weights([l3_w, l3_b])
+
+        # Convert to TFLite
+        converter = tf.lite.TFLiteConverter.from_keras_model(tf_model)
+        converter.optimizations = [tf.lite.Optimize.DEFAULT]
+        tflite_model = converter.convert()
+
+        with open(path, 'wb') as f:
+            f.write(tflite_model)
+
+        return len(tflite_model)
+    except ImportError:
+        print("  TensorFlow not available — skipping TFLite export")
+        return 0
+    except Exception as e:
+        print(f"  TFLite export failed: {e}")
+        return 0
+
+
 # ---- Training ----
 
 def train():
@@ -326,14 +366,24 @@ def train():
     print(f"Test   - MSE: {test_mse:.4f}, MAE: {test_mae:.2f}")
     print(f"Correlation: {corr:.4f}")
 
-    # Export
+    # Export .clsmdl
     size = export_model(model, MODEL_PATH)
-    print(f"\nModel: {MODEL_PATH} ({size / 1024:.1f} KB)")
-
+    print(f"\nModel (.clsmdl): {MODEL_PATH} ({size / 1024:.1f} KB)")
     if size > 10 * 1024 * 1024:
         print("WARNING: Model exceeds 10MB")
     else:
         print("PASS: Model < 10MB")
+
+    # Export .tflite
+    tflite_size = export_tflite(model, TFLITE_PATH)
+    if tflite_size > 0:
+        print(f"Model (.tflite): {TFLITE_PATH} ({tflite_size / 1024:.1f} KB)")
+        if tflite_size > 10 * 1024 * 1024:
+            print("WARNING: TFLite model exceeds 10MB")
+        else:
+            print("PASS: TFLite model < 10MB")
+    else:
+        print("TFLite export skipped")
 
     # Metrics
     metrics = {
@@ -345,6 +395,10 @@ def train():
         'model_target': 'r>0.7 with self-reported focus',
         'architecture': {'input': 8, 'hidden1': 32, 'hidden2': 16, 'output_0_to_100': True},
         'dataset': {'total': len(X), 'train': len(X_tr), 'val': len(X_va), 'test': len(X_te)},
+        'models': {
+            'clsmdl': {'path': MODEL_PATH, 'size_kb': size / 1024},
+            'tflite': {'path': TFLITE_PATH, 'size_kb': tflite_size / 1024} if tflite_size > 0 else None,
+        },
     }
     with open(METRICS_PATH, 'w') as f:
         json.dump(metrics, f, indent=2)

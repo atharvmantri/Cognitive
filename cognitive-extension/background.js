@@ -12,6 +12,11 @@
 
 'use strict';
 
+// ───── Imports ─────
+// badge.js and signal-aggregator.js are loaded via manifest.json service_worker
+// In MV3, we use importScripts for shared modules
+importScripts('badge.js', 'lib/signal-aggregator.js');
+
 // ───── Configuration ─────
 const API_BASE = 'http://127.0.0.1:8000';
 const SIGNAL_BATCH_INTERVAL_MS = 5000;   // Send signals every 5 seconds
@@ -27,6 +32,9 @@ let sessionId = crypto.randomUUID();
 let badgeUpdateTimer = null;
 let syncTimer = null;
 let batchTimer = null;
+
+// Use SignalAggregator for rolling-window feature computation
+const sigAggregator = new SignalAggregator();
 
 // ───── Initialization ─────
 
@@ -72,8 +80,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
      case 'PAUSE':
       isPaused = true;
       flushSignals(); // Flush remaining before pausing
-      setBadge('gray', '--');
-      chrome.action.setBadgeBackgroundColor({ color: '#666666' });
+      setBadgeText('||');
+      setBadgeColor('#666666');
       sendResponse({ paused: true });
       break;
 
@@ -107,25 +115,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 function handleSignal(payload) {
   if (isPaused) return;
 
+  // Validate signal integrity (privacy check)
+  if (typeof validateSignalIntegrity === 'function') {
+    const validation = validateSignalIntegrity(payload);
+    if (!validation.valid) {
+      console.warn('[cognitive] Signal integrity check failed:', validation.issues);
+      return;
+    }
+  }
+
   const signal = {
     session_id: sessionId,
     timestamp: new Date().toISOString(),
     kpm: payload.kpm || 0,
-    inter_key_avg: payload.interKeyAvg || 0,
-    switch_rate: payload.switchRate || 0,
-    scroll_velocity: payload.scrollVelocity || 0,
-    scroll_delta: payload.scrollDelta || 0,
-    mouse_entropy: payload.mouseEntropy || 0,
-    idle_ratio: payload.idleRatio || 0,
-    tab_count: payload.tabCount || 1,
-    domain_switches: payload.domainSwitches || 0,
-    time_of_day: payload.timeOfDay || 0,
-    active_url: payload.activeUrl || '',
-    active_title: payload.activeTitle || '',
-    idle_seconds: payload.idleSeconds || 0,
+    inter_key_avg: payload.interKeyAvg || payload.inter_key_avg || 0,
+    switch_rate: payload.switchRate || payload.switch_rate || 0,
+    scroll_velocity: payload.scrollVelocity || payload.scroll_velocity || 0,
+    scroll_delta: payload.scrollDelta || payload.scroll_delta || 0,
+    mouse_entropy: payload.mouseEntropy || payload.mouse_entropy || 0,
+    idle_ratio: payload.idleRatio || payload.idle_ratio || 0,
+    tab_count: payload.tabCount || payload.tab_count || 1,
+    domain_switches: payload.domainSwitches || payload.domain_switches || 0,
+    time_of_day: payload.timeOfDay || payload.time_of_day || 0,
+    active_url: payload.activeUrl || payload.active_url || '',
+    active_title: payload.activeTitle || payload.active_title || '',
+    idle_seconds: payload.idleSeconds || payload.idle_seconds || 0,
   };
 
-  signalBuffer.push(signal);
+  // Feed into SignalAggregator for rolling-window computation
+  const aggregated = sigAggregator.addSignal(signal);
+
+  if (aggregated) {
+    signalBuffer.push(aggregated);
+  } else {
+    signalBuffer.push(signal);
+  }
 
   // Flush if buffer is large
   if (signalBuffer.length >= SIGNAL_BUFFER_MAX) {
@@ -201,8 +225,8 @@ async function syncCLSState() {
       // Learning mode
       currentCLS = null;
       currentState = 'learning';
-      setBadge('gray', '...');
-      chrome.action.setBadgeBackgroundColor({ color: '#6b7280' });
+      setBadgeText('...');
+      setBadgeColor('#6b7280');
     }
 
     // Check for active interventions
@@ -217,8 +241,8 @@ async function syncCLSState() {
 
 function updateBadge(cls, state) {
   if (cls === null || cls === undefined) {
-    setBadge('gray', '...');
-    chrome.action.setBadgeBackgroundColor({ color: '#6b7280' });
+    setBadgeText('...');
+    setBadgeColor('#6b7280');
     return;
   }
 
@@ -226,36 +250,36 @@ function updateBadge(cls, state) {
 
   switch (state) {
     case 'restorative':
-      setBadge('#22c55e', String(rounded));
-      chrome.action.setBadgeBackgroundColor({ color: '#22c55e' });
+      setBadgeText(String(rounded));
+      setBadgeColor('#22c55e');
       break;
     case 'light':
-      setBadge('#22c55e', String(rounded));
-      chrome.action.setBadgeBackgroundColor({ color: '#22c55e' });
+      setBadgeText(String(rounded));
+      setBadgeColor('#22c55e');
       break;
     case 'focused':
-      setBadge('#eab308', String(rounded));
-      chrome.action.setBadgeBackgroundColor({ color: '#eab308' });
+      setBadgeText(String(rounded));
+      setBadgeColor('#eab308');
       break;
     case 'heavy':
-      setBadge('#ef4444', String(rounded));
-      chrome.action.setBadgeBackgroundColor({ color: '#ef4444' });
+      setBadgeText(String(rounded));
+      setBadgeColor('#ef4444');
       break;
     case 'overloaded':
-      setBadge('#a855f7', String(rounded));
-      chrome.action.setBadgeBackgroundColor({ color: '#a855f7' });
+      setBadgeText(String(rounded));
+      setBadgeColor('#a855f7');
       // Animate badge for attention
       pulseBadge();
       break;
     default:
-      setBadge('#6b7280', '...');
-      chrome.action.setBadgeBackgroundColor({ color: '#6b7280' });
+      setBadgeText('...');
+      setBadgeColor('#6b7280');
   }
 }
 
 function setBadge(color, text) {
-  chrome.action.setBadgeText({ text });
-  chrome.action.setBadgeTextColor({ color: '#ffffff' });
+  setBadgeText(text);
+  setBadgeColor(color);
 }
 
 let pulseInterval = null;
@@ -277,8 +301,8 @@ function pulseBadge() {
 }
 
 function resetBadge() {
-  setBadge('#6b7280', '');
-  chrome.action.setBadgeBackgroundColor({ color: '#6b7280' });
+  setBadgeText('');
+  setBadgeColor('#6b7280');
 }
 
 // ───── Notification Interception ─────
@@ -365,8 +389,8 @@ function registerCommands() {
       case 'toggle-pause':
         isPaused = !isPaused;
         if (isPaused) {
-          setBadge('gray', '||');
-          chrome.action.setBadgeBackgroundColor({ color: '#666666' });
+          setBadgeText('||');
+          setBadgeColor('#666666');
         } else {
           sessionId = crypto.randomUUID();
           startSignalPipeline();

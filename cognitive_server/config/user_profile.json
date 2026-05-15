@@ -50,6 +50,13 @@
     "circadian_profile": "auto"
   },
 
+  "google_calendar": {
+    "enabled": false,
+    "api_key": "",
+    "calendar_id": "primary",
+    "fallback_enabled": true
+  },
+
   "privacy": {
     "log_keystroke_content": false,
     "log_screenshot": false,

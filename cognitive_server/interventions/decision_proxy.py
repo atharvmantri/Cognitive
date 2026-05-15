@@ -2,7 +2,7 @@
 Cognitive Server - Decision Proxy Engine
 Intelligent scheduling recommendations based on:
   - Historical CLS patterns (from personalizer)
-  - Calendar conflict simulation
+  - Calendar conflict detection (Google Calendar API or fallback)
   - Deadline optimization
   - Multi-factor slot scoring
 """
@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Tuple
 from cognitive_server.db import sqlite_store
 from cognitive_server.ml.personalizer import get_personalizer
 from cognitive_server.ml.features import feature_vector_to_array
+from cognitive_server.interventions.calendar_api import get_calendar_client
 
 
 class SchedulingConflict:
@@ -43,7 +44,7 @@ class DecisionProxy:
     
     Scores proposed time slots using:
     1. Historical energy patterns (from CLS load history)
-    2. Calendar conflict detection
+    2. Calendar conflict detection (Google Calendar API or fallback)
     3. Deadline urgency optimization
     4. Personal circadian rhythm patterns
     5. Focus block preservation
@@ -61,43 +62,28 @@ class DecisionProxy:
     def __init__(self):
         self.calendar_events: List[SchedulingConflict] = []
         self.scheduling_history: List[Dict] = []
+        self._calendar_client = None
 
     async def initialize(self):
-        """Initialize with any stored calendar data."""
-        self.calendar_events = await self._load_calendar_events()
+        """Initialize with calendar data from Google Calendar API or fallback."""
+        if self._calendar_client is None:
+            self._calendar_client = get_calendar_client()
+            await self._calendar_client.initialize()
 
-    async def _load_calendar_events(self) -> List[SchedulingConflict]:
-        """
-        Load calendar events. In production, this queries Google Calendar API.
-        For now, simulates based on load history patterns.
-        """
-        # Simulate calendar events from recent scheduling patterns
-        events = []
-        
-        # Check for auto-generated "meetings" based on high-focus block patterns
-        recent_load = await sqlite_store.get_load_history(hours=48.0)
-        if len(recent_load) < 5:
-            return events
-
-        # Simulate typical work calendar events
+        # Load events for next 24 hours
         from datetime import datetime, timedelta, timezone
         now = datetime.now(timezone.utc)
-        
-        # Simulate a morning meeting
-        events.append(SchedulingConflict(
-            start=(now - timedelta(hours=2)).isoformat(),
-            end=(now - timedelta(hours=1)).isoformat(),
-            title="Morning Standup"
-        ))
-        
-        # Simulate an afternoon meeting
-        events.append(SchedulingConflict(
-            start=(now + timedelta(hours=4)).isoformat(),
-            end=(now + timedelta(hours=5)).isoformat(),
-            title="Team Sync"
-        ))
+        end = now + timedelta(hours=24)
 
-        return events
+        events = await self._calendar_client.get_events(now, end)
+        self.calendar_events = [
+            SchedulingConflict(
+                start=evt["start"],
+                end=evt["end"],
+                title=evt["title"],
+            )
+            for evt in events
+        ]
 
     def _parse_iso(self, dt_str: str) -> datetime.datetime:
         """Parse ISO-8601 string to UTC datetime."""

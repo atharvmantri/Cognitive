@@ -270,6 +270,11 @@ function parseTimeString(timeStr, baseDate) {
 function handleInterventionUpdate(data) {
   const held = data.held || [];
   const count = data.count || 0;
+  const cls = data.cls || 0;
+  const state = data.state || 'focused';
+
+  // Signal to browser.js interceptor whether to block notifications
+  window.__cognitive_cls_blocked = cls > 60;
 
   if (count > 0) {
     suppressNotificationElements();
@@ -282,6 +287,8 @@ function handleInterventionUpdate(data) {
       handleSlackIntervention(notif);
     } else if (notif.source === 'calendar') {
       handleCalendarIntervention(notif);
+    } else if (notif.source === 'browser') {
+      // Browser notifications are already suppressed via the hook
     }
   });
 }
@@ -316,41 +323,40 @@ function suppressNotificationElements() {
 }
 
 function handleGmailIntervention(notif) {
-  if (!window.location.hostname.includes('mail.google')) return;
+  if (!GmailInterceptor.isOnGmailPage()) return;
   try {
-    // Mark Gmail threads visually as held
-    document.querySelectorAll(
-      'table.zA tr.zA[aria-label*="unread"], tr.zA[aria-label*="Unread"]'
-    ).forEach((el) => {
-      el.style.opacity = '0.4';
-      el.style.textDecoration = 'line-through';
-      el.setAttribute('data-cognitive-held', 'true');
-    });
+    // Mark Gmail threads visually as held using the interceptor
+    GmailInterceptor.autoMarkRead();
+
+    // If a draft response is provided, inject it
+    if (notif.draft_response) {
+      GmailInterceptor.injectDraftBanner(notif.draft_response);
+    }
   } catch { /* Gmail DOM not ready */ }
 }
 
 function handleSlackIntervention(notif) {
-  if (!window.location.hostname.includes('slack.com')) return;
+  if (!SlackInterceptor.isOnSlackPage()) return;
   try {
-    // Update document title to show focus mode
+    // Set Slack status to focus mode based on CLS state
     const state = notif.state || 'heavy';
-    const prefix = state === 'overloaded' ? '🟣 Overloaded' :
-                   state === 'heavy' ? '🔴 Focus Mode' : '🟡 Focused';
-    if (!document.title.startsWith(prefix)) {
-      document.title = `${prefix} | ${document.title.replace(/^🧠[^|]*\| /, '')}`;
+    const clsScore = notif.cls_score || 70;
+    SlackInterceptor.setFocusStatus(clsScore, state);
+
+    // If a draft response is provided, inject it into the composer
+    if (notif.draft_response) {
+      SlackInterceptor.draftReply(notif.draft_response, notif.channel);
     }
   } catch { /* Slack DOM not ready */ }
 }
 
 function handleCalendarIntervention(notif) {
-  if (!window.location.hostname.includes('calendar.google')) return;
-  // Calendar interventions are handled via auto-respond in interceptors/calendar.js
-  // This just marks visual indicators on invite cards
+  if (!CalendarInterceptor.isOnCalendarPage()) return;
   try {
-    document.querySelectorAll(
-      'div[aria-label*="invited"], div[data-eventid]'
-    ).forEach((el) => {
-      if (!el.querySelector('.cognitive-held-badge')) {
+    // Capture any pending invitations and mark them
+    const invitations = CalendarInterceptor.captureInvitations();
+    invitations.forEach((inv) => {
+      if (!inv.element.querySelector('.cognitive-held-badge')) {
         const badge = document.createElement('div');
         badge.className = 'cognitive-held-badge';
         badge.textContent = '🧠 Held';
@@ -359,9 +365,14 @@ function handleCalendarIntervention(notif) {
           padding: 2px 6px; border-radius: 3px; margin-left: 8px;
           display: inline-block; vertical-align: middle;
         `;
-        el.appendChild(badge);
+        inv.element.appendChild(badge);
       }
     });
+
+    // If a draft response is provided, auto-respond
+    if (notif.draft_response) {
+      CalendarInterceptor.autoRespondToInvite(notif.draft_response);
+    }
   } catch { /* Calendar DOM not ready */ }
 }
 
@@ -875,6 +886,11 @@ function extractDomain(url) {
 
 function init() {
   console.log('[cognitive:content] Content script initialized');
+
+  // Initialize browser notification interceptor (hooks Notification constructor)
+  if (typeof initNotificationsInterceptor === 'function') {
+    initNotificationsInterceptor();
+  }
 
   // Set initial URL and title
   signalState.activeUrl = extractDomain(window.location.href);

@@ -27,7 +27,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["lib/privacy-guard.js", "content.js"],
+      "js": ["lib/privacy-guard.js", "interceptors/browser.js", "interceptors/gmail.js", "interceptors/slack.js", "interceptors/calendar.js", "content.js"],
       "run_at": "document_start",
       "all_frames": false
     }

@@ -362,6 +362,8 @@ async function checkInterventions() {
             type: 'INTERVENTION_UPDATE',
             held: data.held_notifications,
             count: data.held_count,
+            cls: currentCLS,
+            state: currentState,
           }).catch(() => {}); // Ignore errors for inactive tabs
         });
       });

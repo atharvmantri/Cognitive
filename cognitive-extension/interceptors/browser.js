@@ -14,14 +14,15 @@ const NOTIFICATION_HOOK_SCRIPT = `
   window.Notification = function(title, options) {
     // Send notification details to extension
     chrome.runtime.sendMessage({
-      type: 'PAGE_NOTIFICATION',
+      type: 'PAGE_NOTIFICATIONS',
       payload: {
-        title: title,
-        body: options && options.body ? options.body : '',
-        tag: options && options.tag ? options.tag : '',
-        icon: options && options.icon ? options.icon : '',
+        notifications: [{
+          source: 'browser',
+          sender: title || 'Web Notification',
+          preview: options && options.body ? options.body : '',
+        }],
+        url: window.location.href,
         timestamp: Date.now(),
-        url: window.location.href
       }
     }).catch(function() {});
 

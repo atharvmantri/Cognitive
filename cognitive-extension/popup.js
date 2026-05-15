@@ -13,6 +13,8 @@ const trendSvg = document.getElementById('trend-svg');
 const trendLine = document.getElementById('trend-line');
 const trendFill = document.getElementById('trend-fill');
 const trendEmpty = document.getElementById('trend-empty');
+const decisionPanel = document.getElementById('decision-panel');
+const btnDecisionRefresh = document.getElementById('btn-decision-refresh');
 const heldCountEl = document.getElementById('held-count');
 const heldListEl = document.getElementById('held-list');
 const logListEl = document.getElementById('log-list');
@@ -33,6 +35,7 @@ let isPaused = false;
 
 document.addEventListener('DOMContentLoaded', () => {
   setupButtons();
+  setupDecisionPanel();
   refreshState();
   // Auto-refresh every 15 seconds when popup is open
   setInterval(refreshState, 15000);
@@ -71,6 +74,134 @@ function setupButtons() {
       showToast('Failed to toggle pause', true);
     }
   });
+}
+
+// ───── Decision Panel ─────
+
+function setupDecisionPanel() {
+  btnDecisionRefresh.addEventListener('click', () => {
+    loadDecisionRecommendations();
+  });
+
+  // Listen for decision panel open from background (shortcut)
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'OPEN_DECISION_PANEL') {
+      loadDecisionRecommendations();
+      sendResponse({ ack: true });
+    }
+  });
+}
+
+async function loadDecisionRecommendations() {
+  if (!decisionPanel) return;
+
+  decisionPanel.innerHTML = '<div class="decision-loading">Computing optimal slots</div>';
+
+  try {
+    // Fetch proposed slots from active tab's page (if on Gmail/Calendar)
+    const proposedSlots = await extractProposedSlotsFromPage();
+
+    if (!proposedSlots || proposedSlots.length === 0) {
+      decisionPanel.innerHTML = `
+        <div class="decision-empty">
+          No scheduling context detected.<br>
+          Open a meeting invite or scheduling email to see recommendations.
+        </div>
+      `;
+      return;
+    }
+
+    const response = await fetchWithTimeout('http://127.0.0.1:8000/api/v1/decisions/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        proposed_slots: proposedSlots,
+        duration_minutes: 30,
+        context: 'Meeting scheduling',
+      }),
+    });
+
+    if (!response.ok) {
+      decisionPanel.innerHTML = '<div class="decision-empty">Server unavailable</div>';
+      return;
+    }
+
+    const data = await response.json();
+    renderDecisionOptions(data);
+  } catch (err) {
+    decisionPanel.innerHTML = '<div class="decision-empty">Failed to load recommendations</div>';
+  }
+}
+
+async function extractProposedSlotsFromPage() {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tabs[0]) return null;
+
+    const result = await chrome.tabs.sendMessage(tabs[0].id, {
+      type: 'EXTRACT_MEETING_SLOTS',
+    });
+
+    return result?.slots || null;
+  } catch {
+    // Fallback: generate sample slots for demo
+    const now = new Date();
+    const slots = [];
+    for (let i = 2; i <= 8; i += 2) {
+      const slot = new Date(now.getTime() + i * 3600000);
+      slots.push(slot.toISOString());
+    }
+    return slots;
+  }
+}
+
+function renderDecisionOptions(data) {
+  if (!data.ranked_options || data.ranked_options.length === 0) {
+    decisionPanel.innerHTML = '<div class="decision-empty">No suitable slots found</div>';
+    return;
+  }
+
+  let html = '';
+
+  for (const opt of data.ranked_options) {
+    const slotDate = new Date(opt.slot);
+    const timeStr = slotDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dateStr = slotDate.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+
+    const factors = opt.factors;
+    const factorTags = [
+      { label: `Energy ${Math.round(factors.energy * 100)}%`, value: factors.energy },
+      { label: `Conflict ${Math.round(factors.conflict * 100)}%`, value: 1 - factors.conflict },
+      { label: `Focus ${Math.round(factors.focus_preservation * 100)}%`, value: factors.focus_preservation },
+    ].map(f => {
+      const cls = f.value > 0.7 ? 'high' : f.value < 0.4 ? 'low' : 'neutral';
+      return `<span class="factor-tag ${cls}">${f.label}</span>`;
+    }).join('');
+
+    html += `
+      <div class="decision-option rank-${opt.rank}">
+        <div class="decision-header">
+          <span class="decision-rank">#${opt.rank} Pick</span>
+          <span class="decision-score">${Math.round(opt.score * 100)}%</span>
+        </div>
+        <div class="decision-time">${dateStr}, ${timeStr}</div>
+        <div class="decision-rationale">${escapeHtml(opt.rationale)}</div>
+        <div class="decision-factors">${factorTags}</div>
+      </div>
+    `;
+  }
+
+  // Add suggested response
+  if (data.suggested_response) {
+    html += `
+      <div class="decision-response">
+        <strong>Suggested reply:</strong><br>
+        ${escapeHtml(data.suggested_response)}
+      </div>
+    `;
+  }
+
+  decisionPanel.innerHTML = html;
 }
 
 // ───── State Refresh ─────

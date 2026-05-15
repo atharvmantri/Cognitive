@@ -188,6 +188,83 @@ function sendPageNotifications() {
   }).catch(() => {});
 }
 
+// ───── Meeting Slot Extraction ─────
+
+function extractMeetingSlotsFromPage() {
+  const slots = [];
+  const now = new Date();
+
+  // Gmail: look for proposed times in email body
+  if (window.location.hostname.includes('mail.google')) {
+    try {
+      const emailBody = document.querySelector('div[role="main"] div.a3s, div.adn');
+      if (emailBody) {
+        const text = emailBody.textContent || '';
+        const timePatterns = [
+          /(\d{1,2}):(\d{2})\s*(am|pm)/gi,
+          /(\d{1,2})\s*-\s*(\d{1,2})(\s*(am|pm))?/gi,
+          /(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/gi,
+          /(\d{1,2})\/(\d{1,2})/g,
+        ];
+
+        // Extract any time mentions and convert to ISO slots
+        const timeMatches = text.match(/(\d{1,2}):(\d{2})\s*(am|pm)/gi);
+        if (timeMatches) {
+          timeMatches.forEach((match) => {
+            const parsed = parseTimeString(match, now);
+            if (parsed) slots.push(parsed.toISOString());
+          });
+        }
+      }
+    } catch { /* Gmail DOM not available */ }
+  }
+
+  // Google Calendar: extract event times from the page
+  if (window.location.hostname.includes('calendar.google')) {
+    try {
+      const eventElements = document.querySelectorAll('[data-eventid], div[role="dialog"]');
+      eventElements.forEach((el) => {
+        const datetime = el.querySelector('time[datetime]');
+        if (datetime) {
+          slots.push(datetime.getAttribute('datetime'));
+        }
+      });
+    } catch { /* Calendar DOM not available */ }
+  }
+
+  // Fallback: if no slots found, generate demo slots for hackathon
+  if (slots.length === 0) {
+    for (let i = 2; i <= 8; i += 2) {
+      const slot = new Date(now.getTime() + i * 3600000);
+      slots.push(slot.toISOString());
+    }
+  }
+
+  return slots;
+}
+
+function parseTimeString(timeStr, baseDate) {
+  const match = timeStr.match(/(\d{1,2}):(\d{2})\s*(am|pm)/i);
+  if (!match) return null;
+
+  let hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+  const period = match[3].toLowerCase();
+
+  if (period === 'pm' && hours < 12) hours += 12;
+  if (period === 'am' && hours === 12) hours = 0;
+
+  const result = new Date(baseDate);
+  result.setHours(hours, minutes, 0, 0);
+
+  // If time is in the past, assume tomorrow
+  if (result < baseDate) {
+    result.setDate(result.getDate() + 1);
+  }
+
+  return result;
+}
+
 // ───── Intervention Handlers ─────
 
 function handleInterventionUpdate(data) {
@@ -286,6 +363,211 @@ function handleCalendarIntervention(notif) {
       }
     });
   } catch { /* Calendar DOM not ready */ }
+}
+
+// ───── Decision Panel Overlay ─────
+
+let decisionPanelOverlay = null;
+
+function toggleDecisionPanelOverlay() {
+  if (decisionPanelOverlay) {
+    decisionPanelOverlay.remove();
+    decisionPanelOverlay = null;
+    return;
+  }
+
+  decisionPanelOverlay = document.createElement('div');
+  decisionPanelOverlay.id = 'cognitive-decision-panel';
+  decisionPanelOverlay.className = 'cognitive-decision-overlay';
+  decisionPanelOverlay.innerHTML = `
+    <div class="cognitive-decision-content">
+      <div class="cognitive-decision-header">
+        <h3>🤖 Cognitive Decision Panel</h3>
+        <button class="cognitive-decision-close" title="Close">×</button>
+      </div>
+      <div class="cognitive-decision-body" id="cognitive-decision-body">
+        <div class="cognitive-decision-loading">Computing optimal slots...</div>
+      </div>
+    </div>
+  `;
+
+  (document.body || document.documentElement).appendChild(decisionPanelOverlay);
+
+  // Close handler
+  decisionPanelOverlay.querySelector('.cognitive-decision-close').addEventListener('click', () => {
+    decisionPanelOverlay.remove();
+    decisionPanelOverlay = null;
+  });
+
+  // Inject styles
+  if (!document.getElementById('cognitive-decision-styles')) {
+    const style = document.createElement('style');
+    style.id = 'cognitive-decision-styles';
+    style.textContent = `
+      .cognitive-decision-overlay {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        width: 380px;
+        max-height: 80vh;
+        background: #0f1117;
+        border: 1px solid #1e293b;
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        z-index: 2147483647;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        color: #e2e8f0;
+        font-size: 13px;
+      }
+      .cognitive-decision-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        border-bottom: 1px solid #1e293b;
+      }
+      .cognitive-decision-header h3 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .cognitive-decision-close {
+        background: none;
+        border: none;
+        color: #64748b;
+        font-size: 20px;
+        cursor: pointer;
+        padding: 0 4px;
+      }
+      .cognitive-decision-close:hover { color: #e2e8f0; }
+      .cognitive-decision-body {
+        padding: 12px 16px;
+        max-height: 60vh;
+        overflow-y: auto;
+      }
+      .cognitive-decision-loading {
+        text-align: center;
+        padding: 20px;
+        color: #475569;
+      }
+      .cognitive-decision-option {
+        padding: 10px;
+        background: #1e2130;
+        border-radius: 8px;
+        margin-bottom: 8px;
+        border-left: 3px solid transparent;
+      }
+      .cognitive-decision-option.rank-1 { border-left-color: #22c55e; background: #1a2332; }
+      .cognitive-decision-option.rank-2 { border-left-color: #eab308; }
+      .cognitive-decision-option.rank-3 { border-left-color: #f97316; }
+      .cognitive-decision-rank {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .cognitive-decision-option.rank-1 .cognitive-decision-rank { color: #22c55e; }
+      .cognitive-decision-option.rank-2 .cognitive-decision-rank { color: #eab308; }
+      .cognitive-decision-option.rank-3 .cognitive-decision-rank { color: #f97316; }
+      .cognitive-decision-time { font-size: 13px; font-weight: 500; margin: 4px 0; }
+      .cognitive-decision-rationale { font-size: 11px; color: #64748b; }
+      .cognitive-decision-response {
+        margin-top: 12px;
+        padding: 10px;
+        background: #0f1117;
+        border-radius: 6px;
+        font-size: 11px;
+        color: #94a3b8;
+        line-height: 1.4;
+        border: 1px solid #1e293b;
+      }
+      .cognitive-decision-empty {
+        text-align: center;
+        padding: 20px;
+        color: #475569;
+        font-style: italic;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  // Fetch recommendations
+  fetchDecisionRecommendations();
+}
+
+async function fetchDecisionRecommendations() {
+  const body = document.getElementById('cognitive-decision-body');
+  if (!body) return;
+
+  try {
+    const slots = extractMeetingSlotsFromPage();
+
+    const response = await fetch('http://127.0.0.1:8000/api/v1/decisions/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        proposed_slots: slots,
+        duration_minutes: 30,
+        context: 'Meeting scheduling',
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!response.ok) {
+      body.innerHTML = '<div class="cognitive-decision-empty">Server unavailable</div>';
+      return;
+    }
+
+    const data = await response.json();
+    renderInlineDecisionOptions(data);
+  } catch (err) {
+    body.innerHTML = '<div class="cognitive-decision-empty">Failed to load recommendations</div>';
+  }
+}
+
+function renderInlineDecisionOptions(data) {
+  const body = document.getElementById('cognitive-decision-body');
+  if (!body) return;
+
+  if (!data.ranked_options || data.ranked_options.length === 0) {
+    body.innerHTML = '<div class="cognitive-decision-empty">No suitable slots found</div>';
+    return;
+  }
+
+  let html = '';
+
+  for (const opt of data.ranked_options) {
+    const slotDate = new Date(opt.slot);
+    const timeStr = slotDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dateStr = slotDate.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+
+    html += `
+      <div class="cognitive-decision-option rank-${opt.rank}">
+        <div class="cognitive-decision-rank">#${opt.rank} Pick — ${Math.round(opt.score * 100)}% match</div>
+        <div class="cognitive-decision-time">${dateStr}, ${timeStr}</div>
+        <div class="cognitive-decision-rationale">${escapeHtmlInline(opt.rationale)}</div>
+      </div>
+    `;
+  }
+
+  if (data.suggested_response) {
+    html += `
+      <div class="cognitive-decision-response">
+        <strong>Suggested reply:</strong><br>
+        ${escapeHtmlInline(data.suggested_response)}
+      </div>
+    `;
+  }
+
+  body.innerHTML = html;
+}
+
+function escapeHtmlInline(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
 }
 
 // ───── Keyboard Capture ─────
@@ -623,6 +905,18 @@ function init() {
     // Handle intervention updates from background
     if (message.type === 'INTERVENTION_UPDATE') {
       handleInterventionUpdate(message);
+    }
+
+    // Extract meeting time slots from page (Gmail/Calendar)
+    if (message.type === 'EXTRACT_MEETING_SLOTS') {
+      const slots = extractMeetingSlotsFromPage();
+      sendResponse({ slots });
+    }
+
+    // Open inline decision panel overlay
+    if (message.type === 'OPEN_DECISION_PANEL') {
+      toggleDecisionPanelOverlay();
+      sendResponse({ ack: true });
     }
 
     return true;

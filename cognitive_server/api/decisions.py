@@ -2,17 +2,25 @@
 Cognitive Server - Decision Proxy API
 Endpoint: POST /api/v1/decisions/schedule
 Handles meeting scheduling requests, predicts optimal time slots, and auto-drafts responses.
+Uses DecisionProxy for multi-factor slot scoring.
 """
 
 import datetime
-import math
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from cognitive_server.db import sqlite_store
-from cognitive_server.interventions.draft_generator import generate_scheduling_response
+from cognitive_server.interventions.decision_proxy import (
+    get_decision_proxy,
+    get_decision_proxy_async,
+    DecisionProxy,
+)
+from cognitive_server.interventions.draft_generator import (
+    generate_scheduling_response,
+    generate_deferral_response,
+)
 
 router = APIRouter(tags=["decisions"])
 
@@ -34,27 +42,26 @@ class DecisionRequest(BaseModel):
     context: str = Field(default="", description="Meeting context (e.g. 'Sprint planning')")
 
 
+class FactorBreakdown(BaseModel):
+    energy: float
+    conflict: float
+    deadline: float
+    circadian: float
+    focus_preservation: float
+
+
 class RankedOption(BaseModel):
     slot: str
     rank: int
     rationale: str
     predicted_cls_at_slot: float
+    score: float
+    factors: FactorBreakdown
 
 
 class DecisionResponse(BaseModel):
     ranked_options: List[RankedOption]
     suggested_response: str
-
-
-# --- Helper: Convert CLS to energy level ---
-
-def _cls_to_energy(cls_score: float) -> float:
-    """Higher CLS = lower energy. Returns 0.0 (exhausted) to 1.0 (fully energized)."""
-    if cls_score < 0:
-        return 1.0
-    if cls_score > 100:
-        return 0.0
-    return round(max(0.0, min(1.0, 1.0 - (cls_score / 120.0))), 3)
 
 
 def _parse_iso_datetime(dt_str: str) -> datetime.datetime:
@@ -65,64 +72,69 @@ def _parse_iso_datetime(dt_str: str) -> datetime.datetime:
 
 def _format_datetime(dt: datetime.datetime) -> str:
     """Format datetime to a human-readable string."""
-    return dt.strftime("%a %b %d, %I:%M %p UTC")
+    return dt.strftime("%a %b %d, %I:%M %p")
 
 
-# --- Score a time slot ---
+# --- Decision Logic ---
 
-async def _score_slot(slot_str: str, duration_minutes: int, context: str) -> dict:
-    """
-    Score a proposed time slot based on:
-    1. Calendar conflicts (future placeholder for Google Calendar API)
-    2. Historical energy patterns from CLS load history
-    3. Time-of-day heuristics
-    """
-    proposed_dt = _parse_iso_datetime(slot_str)
-    proposed_hour = proposed_dt.hour + proposed_dt.minute / 60.0
+def _cls_to_energy(cls_score: float) -> float:
+    """Higher CLS = lower energy. Returns 0.0 (exhausted) to 1.0 (fully energized)."""
+    if cls_score < 0:
+        return 1.0
+    if cls_score > 100:
+        return 0.0
+    return round(max(0.0, min(1.0, 1.0 - (cls_score / 120.0))), 3)
 
-    # --- 1. Historical Energy Prediction ---
-    # Look at historical CLS for similar time-of-day
-    hour_sin = math.sin(2 * math.pi * proposed_hour / 24.0)
 
-    # Get recent load stats for baseline
-    stats = await sqlite_store.get_load_stats(hours=48.0)
-    mean_cls = float(stats.get("mean_cls") or 0)
+def _build_rationale(slot_info: dict) -> str:
+    """Generate a human-readable rationale for a slot ranking."""
+    parts = []
 
-    # Time-of-day energy curve (typical knowledge worker pattern)
-    # Peak focus: 9-11am, 2-4pm | Trough: 12-1pm, after 5pm
-    if 9 <= proposed_hour < 11:
-        time_modifier = -15.0  # lower CLS expected (better focus)
-    elif 14 <= proposed_hour < 16:
-        time_modifier = -10.0
-    elif 12 <= proposed_hour < 13:
-        time_modifier = +15.0  # post-lunch dip
-    elif proposed_hour >= 17 or proposed_hour < 8:
-        time_modifier = +10.0
+    # Energy-based rationale
+    energy = slot_info["factors"].get("energy", 0.5)
+    if energy > 0.8:
+        parts.append("high energy window")
+    elif energy > 0.5:
+        parts.append("moderate energy")
     else:
-        time_modifier = 0.0
+        parts.append("low energy window")
 
-    predicted_cls = max(0.0, min(100.0, mean_cls + time_modifier))
+    # Conflict rationale
+    conflict_title = slot_info["factors"].get("conflict_title")
+    if conflict_title:
+        parts.append(f"conflicts with '{conflict_title}'")
 
-    # --- 2. Calendar Conflict Check (placeholder) ---
-    # In production: query Google Calendar API for overlapping events
-    has_conflict = False
-    conflict_note = ""
+    # Focus preservation
+    focus = slot_info["factors"].get("focus_preservation", 0.5)
+    if focus > 0.85:
+        parts.append("preserves focus block")
+    elif focus < 0.5:
+        parts.append("may interrupt focus time")
 
-    # --- 3. Score Calculation ---
-    energy = _cls_to_energy(predicted_cls)
+    # Deadline urgency
+    deadline = slot_info["factors"].get("deadline", 0.5)
+    if deadline > 0.7:
+        parts.append("urgent timing")
 
-    # Penalize slots with conflicts heavily
-    if has_conflict:
-        energy *= 0.3
+    # Circadian alignment
+    circadian = slot_info["factors"].get("circadian", 0.5)
+    if circadian > 0.7:
+        parts.append("aligned with your peak hours")
+    elif circadian < 0.4:
+        parts.append("outside your peak hours")
 
-    return {
-        "slot": slot_str,
-        "predicted_cls": round(predicted_cls, 2),
-        "energy": round(energy, 3),
-        "has_conflict": has_conflict,
-        "conflict_note": conflict_note,
-        "time_formatted": _format_datetime(proposed_dt),
-    }
+    return "; ".join(parts) if parts else "reasonable time slot"
+
+
+async def _get_current_load_for_decisions():
+    """Get current load state for decision-making."""
+    record = await sqlite_store.get_current_load()
+    if record:
+        return {
+            "cls_score": record.get("cls_score", 50.0),
+            "state": record.get("load_state", "focused"),
+        }
+    return {"cls_score": 50.0, "state": "focused"}
 
 
 # --- Endpoint ---
@@ -130,69 +142,95 @@ async def _score_slot(slot_str: str, duration_minutes: int, context: str) -> dic
 @router.post("/decisions/schedule",
              response_model=DecisionResponse,
              summary="Get scheduling recommendations",
-             description="Submit proposed meeting time slots; returns ranked options based on predicted cognitive energy.")
+             description=(
+                 "Submit proposed meeting time slots; returns ranked options "
+                 "based on predicted cognitive energy, calendar conflicts, and focus preservation."
+             ))
 async def schedule_decision(request: DecisionRequest):
     """
     Evaluate proposed meeting time slots and return ranked options
-    with predicted cognitive load and auto-drafted response.
+    with predicted cognitive load, factor breakdown, and auto-drafted response.
     """
     try:
-        scored_slots = []
-        for slot_str in request.proposed_slots:
-            result = await _score_slot(slot_str, request.duration_minutes, request.context)
-            scored_slots.append(result)
+        # Initialize the decision proxy
+        proxy = await get_decision_proxy_async()
 
-        # Sort by energy (descending) = best slot first
-        scored_slots.sort(key=lambda x: x["energy"], reverse=True)
+        # Get current cognitive state
+        current_load = await _get_current_load_for_decisions()
 
-        # Take top N (max 3 per FR-DP-002)
-        top_slots = scored_slots[:3]
+        # Score all proposed slots
+        result = await proxy.recommend_slots(
+            proposed_slots=request.proposed_slots,
+            duration_min=request.duration_minutes,
+            context=request.context,
+            max_results=min(3, len(request.proposed_slots)),
+        )
 
         ranked_options = []
-        for i, slot_info in enumerate(top_slots, start=1):
-            rationale_parts = []
-
-            if slot_info["has_conflict"]:
-                rationale_parts.append("conflicts with existing event")
-            else:
-                rationale_parts.append(
-                    f"predicted cognitive load: {slot_info['predicted_cls']:.0f}"
-                    f" ({_cls_to_energy(slot_info['predicted_cls']) * 100:.0f}% energy)"
-                )
-
-            if "morning" in slot_info["time_formatted"].lower() or 8 <= _parse_iso_datetime(slot_info["slot"]).hour < 12:
-                rationale_parts.append("morning focus window")
-            elif 14 <= _parse_iso_datetime(slot_info["slot"]).hour < 16:
-                rationale_parts.append("afternoon energy window")
-
-            rationale = "; ".join(rationale_parts) if rationale_parts else "reasonable time slot"
-
+        for slot_info in result["ranked_options"]:
+            rationale = _build_rationale(slot_info)
             ranked_options.append(RankedOption(
                 slot=slot_info["slot"],
-                rank=i,
+                rank=slot_info["rank"] if "rank" in slot_info else len(ranked_options) + 1,
                 rationale=rationale,
-                predicted_cls_at_slot=slot_info["predicted_cls"],
+                predicted_cls_at_slot=round(100 - (slot_info["factors"].get("energy", 0.5) * 100), 1),
+                score=slot_info["score"],
+                factors=FactorBreakdown(
+                    energy=slot_info["factors"].get("energy", 0.0),
+                    conflict=slot_info["factors"].get("conflict", 0.0),
+                    deadline=slot_info["factors"].get("deadline", 0.0),
+                    circadian=slot_info["factors"].get("circadian", 0.0),
+                    focus_preservation=slot_info["factors"].get("focus_preservation", 0.0),
+                ),
             ))
 
+        # Rank options by score
+        for i, opt in enumerate(ranked_options, start=1):
+            opt.rank = i
+
         # Auto-draft response using the best slot
-        best_slot = top_slots[0] if top_slots else None
-        if best_slot and not best_slot["has_conflict"]:
+        best_slot = result["ranked_options"][0] if result["ranked_options"] else None
+        load_state = current_load.get("state", "focused")
+
+        if best_slot and not best_slot["factors"].get("conflict_title"):
+            slot_dt = _parse_iso_datetime(best_slot["slot"])
+            energy = best_slot["factors"].get("energy", 0.5)
             suggested_response = generate_scheduling_response(
                 context=request.context,
-                proposed_time=_format_datetime(_parse_iso_datetime(best_slot["slot"])),
-                energy_level=_cls_to_energy(best_slot["predicted_cls"]),
-                load_state="focused" if best_slot["predicted_cls"] <= 60 else "heavy",
+                proposed_time=_format_datetime(slot_dt),
+                energy_level=energy,
+                load_state=load_state,
             )
-        elif best_slot and best_slot["has_conflict"]:
-            suggested_response = (
-                f"I have a conflict during {best_slot['time_formatted']}. "
-                f"Could we explore an alternative time? "
-                f"If you have flexibility, I'll suggest an open slot when my focus is at its best."
-            )
+        elif best_slot and best_slot["factors"].get("conflict_title"):
+            conflict = best_slot["factors"]["conflict_title"]
+            # Try next best slot
+            alt_options = [s for s in result["ranked_options"]
+                          if not s["factors"].get("conflict_title")]
+            if alt_options:
+                alt = alt_options[0]
+                alt_dt = _parse_iso_datetime(alt["slot"])
+                energy = alt["factors"].get("energy", 0.5)
+                suggested_response = (
+                    f"The best time conflicts with '{conflict}'. "
+                    f"Here's the next best option:\n\n"
+                )
+                suggested_response += generate_scheduling_response(
+                    context=request.context,
+                    proposed_time=_format_datetime(alt_dt),
+                    energy_level=energy,
+                    load_state=load_state,
+                )
+            else:
+                suggested_response = (
+                    f"The top slot conflicts with '{conflict}'. "
+                    f"All proposed times have conflicts — "
+                    f"please suggest alternative times."
+                )
         else:
             suggested_response = (
-                "I'm having difficulty finding an optimal slot right now. "
-                "Please propose a few times and I'll respond with my availability shortly."
+                f"Current cognitive load is {current_load['cls_score']:.0f} "
+                f"({load_state}). I need a few more time slot options to find "
+                f"the best window for this meeting."
             )
 
         return DecisionResponse(
@@ -204,4 +242,41 @@ async def schedule_decision(request: DecisionRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Decision proxy error: {str(e)}",
+        )
+
+
+@router.post("/decisions/feedback",
+             summary="Submit scheduling feedback",
+             description="Record user's scheduling decision to improve future recommendations.")
+async def decision_feedback(chosen_slot: str, rejected_slots: List[str] = [],
+                            reason: str = ""):
+    """Record user feedback on scheduling decisions for self-improvement."""
+    try:
+        proxy = get_decision_proxy()
+        proxy.record_scheduling_decision(
+            chosen_slot=chosen_slot,
+            rejected_slots=rejected_slots,
+            reason=reason,
+        )
+        return {"status": "feedback_recorded"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to record feedback: {str(e)}",
+        )
+
+
+@router.get("/decisions/stats",
+            summary="Get decision proxy statistics",
+            description="Retrieve statistics about scheduling decisions made.")
+async def decision_stats():
+    """Get decision proxy stats for the popup UI."""
+    try:
+        proxy = get_decision_proxy()
+        stats = proxy.get_scheduling_stats()
+        return stats
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve stats: {str(e)}",
         )

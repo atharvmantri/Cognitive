@@ -25,6 +25,23 @@ const progressFill = document.getElementById('progress-fill');
 const progressText = document.getElementById('progress-text');
 const btnRelease = document.getElementById('btn-release');
 const btnPause = document.getElementById('btn-pause');
+const btnSettings = document.getElementById('btn-settings');
+const settingsPanel = document.getElementById('settings-panel');
+const btnSettingsClose = document.getElementById('btn-settings-close');
+const btnAddSender = document.getElementById('btn-add-sender');
+const btnAddDomain = document.getElementById('btn-add-domain');
+const whitelistSenderInput = document.getElementById('whitelist-sender');
+const whitelistDomainInput = document.getElementById('whitelist-domain');
+const whitelistListEl = document.getElementById('whitelist-list');
+const baselineStatusEl = document.getElementById('baseline-status');
+const circadianStatusEl = document.getElementById('circadian-status');
+const workStartInput = document.getElementById('work-start');
+const workEndInput = document.getElementById('work-end');
+const releaseIntervalInput = document.getElementById('release-interval');
+const toggleBrowser = document.getElementById('toggle-browser');
+const toggleGmail = document.getElementById('toggle-gmail');
+const toggleSlack = document.getElementById('toggle-slack');
+const toggleCalendar = document.getElementById('toggle-calendar');
 
 // ───── State ─────
 let currentCLS = null;
@@ -35,6 +52,7 @@ let isPaused = false;
 
 document.addEventListener('DOMContentLoaded', () => {
   setupButtons();
+  setupSettingsPanel();
   setupDecisionPanel();
   refreshState();
   // Auto-refresh every 15 seconds when popup is open
@@ -74,6 +92,261 @@ function setupButtons() {
       showToast('Failed to toggle pause', true);
     }
   });
+}
+
+// ───── Settings Panel ─────
+
+function setupSettingsPanel() {
+  if (!btnSettings || !settingsPanel) return;
+
+  // Open settings
+  btnSettings.addEventListener('click', async () => {
+    settingsPanel.style.display = 'flex';
+    await loadSettings();
+  });
+
+  // Close settings
+  btnSettingsClose.addEventListener('click', () => {
+    settingsPanel.style.display = 'none';
+  });
+
+  // Toggle handlers
+  [toggleBrowser, toggleGmail, toggleSlack, toggleCalendar].forEach(toggle => {
+    toggle.addEventListener('change', async () => {
+      await saveInterventionToggles();
+    });
+  });
+
+  // Whitelist handlers
+  btnAddSender.addEventListener('click', async () => {
+    const sender = whitelistSenderInput.value.trim();
+    if (!sender) return;
+    await addWhitelistEntry('sender', sender);
+    whitelistSenderInput.value = '';
+    await loadWhitelist();
+  });
+
+  btnAddDomain.addEventListener('click', async () => {
+    const domain = whitelistDomainInput.value.trim();
+    if (!domain) return;
+    await addWhitelistEntry('domain', domain);
+    whitelistDomainInput.value = '';
+    await loadWhitelist();
+  });
+
+  // Schedule handlers
+  [workStartInput, workEndInput, releaseIntervalInput].forEach(input => {
+    input.addEventListener('change', async () => {
+      await saveScheduleSettings();
+    });
+  });
+}
+
+async function loadSettings() {
+  await loadInterventionToggles();
+  await loadWhitelist();
+  await loadScheduleSettings();
+  await loadBaselineStatus();
+  await loadCircadianStatus();
+}
+
+async function loadInterventionToggles() {
+  try {
+    const response = await fetchWithTimeout('http://127.0.0.1:8000/api/v1/settings/intervention-toggles');
+    if (response.ok) {
+      const data = await response.json();
+      toggleBrowser.checked = data.browser !== false;
+      toggleGmail.checked = data.gmail !== false;
+      toggleSlack.checked = data.slack !== false;
+      toggleCalendar.checked = data.calendar !== false;
+    }
+  } catch {
+    // Use defaults (all enabled)
+  }
+}
+
+async function saveInterventionToggles() {
+  const toggles = {
+    browser: toggleBrowser.checked,
+    gmail: toggleGmail.checked,
+    slack: toggleSlack.checked,
+    calendar: toggleCalendar.checked,
+  };
+  try {
+    await fetchWithTimeout('http://127.0.0.1:8000/api/v1/settings/intervention-toggles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(toggles),
+    });
+  } catch {
+    showToast('Failed to save settings', true);
+  }
+}
+
+async function loadWhitelist() {
+  try {
+    const response = await fetchWithTimeout('http://127.0.0.1:8000/api/v1/settings/whitelist');
+    if (response.ok) {
+      const data = await response.json();
+      renderWhitelist(data.senders || [], data.domains || []);
+    }
+  } catch {
+    whitelistListEl.innerHTML = '<div class="whitelist-item">Server unavailable</div>';
+  }
+}
+
+function renderWhitelist(senders, domains) {
+  let html = '';
+  for (const sender of senders) {
+    html += `
+      <div class="whitelist-item">
+        <span>📧 ${escapeHtml(sender)}</span>
+        <button class="remove-btn" data-type="sender" data-value="${escapeHtml(sender)}">✕</button>
+      </div>
+    `;
+  }
+  for (const domain of domains) {
+    html += `
+      <div class="whitelist-item">
+        <span>🌐 ${escapeHtml(domain)}</span>
+        <button class="remove-btn" data-type="domain" data-value="${escapeHtml(domain)}">✕</button>
+      </div>
+    `;
+  }
+  whitelistListEl.innerHTML = html || '<div class="whitelist-item" style="color:#475569">No entries</div>';
+
+  // Attach remove handlers
+  whitelistListEl.querySelectorAll('.remove-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const type = btn.dataset.type;
+      const value = btn.dataset.value;
+      await removeWhitelistEntry(type, value);
+      await loadWhitelist();
+    });
+  });
+}
+
+async function addWhitelistEntry(type, value) {
+  try {
+    await fetchWithTimeout('http://127.0.0.1:8000/api/v1/settings/whitelist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, value }),
+    });
+  } catch {
+    showToast('Failed to add whitelist entry', true);
+  }
+}
+
+async function removeWhitelistEntry(type, value) {
+  try {
+    await fetchWithTimeout(`http://127.0.0.1:8000/api/v1/settings/whitelist/${type}/${encodeURIComponent(value)}`, {
+      method: 'DELETE',
+    });
+  } catch {
+    showToast('Failed to remove whitelist entry', true);
+  }
+}
+
+async function loadScheduleSettings() {
+  try {
+    const response = await fetchWithTimeout('http://127.0.0.1:8000/api/v1/settings/schedule');
+    if (response.ok) {
+      const data = await response.json();
+      workStartInput.value = data.work_start || 8;
+      workEndInput.value = data.work_end || 18;
+      releaseIntervalInput.value = data.release_interval || 90;
+    }
+  } catch {
+    // Use defaults
+  }
+}
+
+async function saveScheduleSettings() {
+  const schedule = {
+    work_start: parseInt(workStartInput.value) || 8,
+    work_end: parseInt(workEndInput.value) || 18,
+    release_interval: parseInt(releaseIntervalInput.value) || 90,
+  };
+  try {
+    await fetchWithTimeout('http://127.0.0.1:8000/api/v1/settings/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(schedule),
+    });
+  } catch {
+    showToast('Failed to save schedule', true);
+  }
+}
+
+async function loadBaselineStatus() {
+  try {
+    const response = await fetchWithTimeout('http://127.0.0.1:8000/api/v1/personalization/baseline');
+    if (response.ok) {
+      const data = await response.json();
+      renderBaselineStatus(data);
+    }
+  } catch {
+    baselineStatusEl.textContent = 'Server unavailable';
+    baselineStatusEl.className = 'baseline-status';
+  }
+}
+
+function renderBaselineStatus(data) {
+  if (data.complete) {
+    baselineStatusEl.innerHTML = `
+      ✅ Baseline collection complete (${data.samples} samples)
+      <br><small>Started: ${data.started_at?.split('T')[0] || 'Unknown'}</small>
+    `;
+    baselineStatusEl.className = 'baseline-status complete';
+  } else {
+    const progress = data.progress || 0;
+    baselineStatusEl.innerHTML = `
+      📊 Collecting baseline data: ${Math.round(progress)}%
+      <br><small>${data.samples || 0} samples collected (target: ${data.target || 100})</small>
+      <br><small>ETA: ${data.eta || 'Unknown'}</small>
+      <div style="margin-top:6px;height:4px;background:#334155;border-radius:2px;overflow:hidden;">
+        <div style="height:100%;width:${progress}%;background:linear-gradient(90deg,#3b82f6,#22c55e);transition:width 0.5s;"></div>
+      </div>
+    `;
+    baselineStatusEl.className = 'baseline-status in-progress';
+  }
+}
+
+async function loadCircadianStatus() {
+  try {
+    const response = await fetchWithTimeout('http://127.0.0.1:8000/api/v1/personalization/circadian');
+    if (response.ok) {
+      const data = await response.json();
+      renderCircadianStatus(data);
+    }
+  } catch {
+    circadianStatusEl.textContent = 'Server unavailable';
+  }
+}
+
+function renderCircadianStatus(data) {
+  if (!data.profile || data.profile === 'unknown') {
+    circadianStatusEl.innerHTML = `
+      ⏳ Analyzing your circadian rhythm...
+      <br><small>Requires 24+ hours of data</small>
+    `;
+    return;
+  }
+
+  const profileLabels = {
+    'night_owl': '🦉 Night Owl',
+    'early_bird': '🐦 Early Bird',
+    'intermediate': '⚖️ Intermediate',
+  };
+  const profileClass = data.profile.replace('_', '-');
+  const label = profileLabels[data.profile] || data.profile;
+
+  circadianStatusEl.innerHTML = `
+    <span class="circadian-profile-tag ${profileClass}">${label}</span>
+    <br><small style="margin-top:6px;display:block;">Peak energy: ${data.peak_hour || 'Unknown'}h</small>
+    <br><small>Low energy: ${data.low_hour || 'Unknown'}h</small>
+  `;
 }
 
 // ───── Decision Panel ─────

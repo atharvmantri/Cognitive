@@ -43,7 +43,33 @@ chrome.runtime.onInstalled.addListener((details) => {
   resetBadge();
   startSignalPipeline();
   registerCommands();
+  registerTabTracking();
 });
+
+// ───── Tab Switch Tracking (background-only API) ─────
+
+let tabSwitchCount = 0;
+let lastTabSwitchTime = 0;
+
+function registerTabTracking() {
+  chrome.tabs.onActivated.addListener(() => {
+    tabSwitchCount++;
+    lastTabSwitchTime = Date.now();
+  });
+}
+
+function getTabSwitchRate() {
+  const now = Date.now();
+  const elapsedMin = (now - lastTabSwitchTime) / 60000;
+  if (elapsedMin < 0.1) return 0;
+  return tabSwitchCount / Math.max(1, elapsedMin);
+}
+
+function resetTabSwitchCount() {
+  const count = tabSwitchCount;
+  tabSwitchCount = 0;
+  return count;
+}
 
 function startSignalPipeline() {
   // Start periodic batch upload
@@ -129,7 +155,7 @@ function handleSignal(payload) {
     timestamp: new Date().toISOString(),
     kpm: payload.kpm || 0,
     inter_key_avg: payload.interKeyAvg || payload.inter_key_avg || 0,
-    switch_rate: payload.switchRate || payload.switch_rate || 0,
+    switch_rate: getTabSwitchRate(),
     scroll_velocity: payload.scrollVelocity || payload.scroll_velocity || 0,
     scroll_delta: payload.scrollDelta || payload.scroll_delta || 0,
     mouse_entropy: payload.mouseEntropy || payload.mouse_entropy || 0,
@@ -158,7 +184,15 @@ function handleSignal(payload) {
 }
 
 async function flushSignals() {
-  if (signalBuffer.length === 0 || isPaused) return;
+  if (isPaused) return;
+
+  // Finalize the current aggregation window
+  const aggregated = sigAggregator.flush();
+  if (aggregated) {
+    signalBuffer.push(aggregated);
+  }
+
+  if (signalBuffer.length === 0) return;
 
   const batch = signalBuffer.splice(0, signalBuffer.length);
 

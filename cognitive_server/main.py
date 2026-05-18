@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from cognitive_server.api import signals, load, interventions, decisions
+from cognitive_server.api import signals, load, interventions, decisions, settings, personalization
 from cognitive_server.db import sqlite_store
 from cognitive_server.interventions.engine import evaluate_interventions
 
@@ -77,6 +77,8 @@ app.include_router(signals.router, prefix="/api/v1")
 app.include_router(load.router, prefix="/api/v1")
 app.include_router(interventions.router, prefix="/api/v1")
 app.include_router(decisions.router, prefix="/api/v1")
+app.include_router(settings.router, prefix="/api/v1")
+app.include_router(personalization.router, prefix="/api/v1")
 
 
 @app.get("/")

@@ -719,22 +719,14 @@ function attachVisibilityListeners() {
 }
 
 // ───── Tab Info ─────
-
-let tabSwitchListenerAttached = false;
+// Note: chrome.tabs API is only available in background scripts.
+// Tab count and switch tracking is handled by background.js.
+// Content script only tracks domain switches via URL comparison.
 
 async function requestTabInfo() {
   try {
     const tabs = await chrome.tabs.query({ currentWindow: true });
     lastKnownTabCount = tabs.length;
-
-    // Attach tab switch listener only once
-    if (!tabSwitchListenerAttached) {
-      tabSwitchListenerAttached = true;
-      chrome.tabs.onActivated.addListener(() => {
-        signalState.tabCount = lastKnownTabCount;
-        signalState.domainSwitches++;
-      });
-    }
   } catch (err) {
     // Extension context not available
   }

@@ -36,11 +36,11 @@ async def evaluate_interventions():
         current = await sqlite_store.get_current_load()
 
         # Phase 1: If no CLS data yet, skip intervention evaluation
-        if current is None or current.get("cognitive_load_score") is None:
+        if current is None or current.get("cls_score") is None:
             return {"action": "no_data", "message": "Waiting for baseline signals"}
 
-        cls_score = current["cognitive_load_score"]
-        state = current["state"]
+        cls_score = current["cls_score"]
+        state = current.get("load_state", "learning")
 
         hold_threshold = config.get("interventions", {}).get("hold_threshold", 60)
         release_threshold = config.get("interventions", {}).get("release_threshold", 40)
@@ -116,18 +116,25 @@ async def _sustained_below_threshold(threshold: float, sustained_seconds: int) -
     Looks at recent load_history entries and verifies all are below threshold.
     """
     try:
-        history = await sqlite_store.get_load_history(
-            limit=max(20, sustained_seconds // 30),
-            hours=max(1, sustained_seconds // 3600),
-        )
+        hours = max(1, sustained_seconds / 3600)
+        history = await sqlite_store.get_load_history(hours=hours)
         if not history or len(history) < 2:
             return False
 
         cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=sustained_seconds)
-        recent = [
-            h for h in history
-            if datetime.fromisoformat(h["timestamp"]).replace(tzinfo=timezone.utc) >= cutoff_time
-        ]
+        recent = []
+        for h in history:
+            ts_str = h.get("timestamp", "")
+            if not ts_str:
+                continue
+            try:
+                ts = datetime.fromisoformat(ts_str)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if ts >= cutoff_time:
+                    recent.append(h)
+            except (ValueError, TypeError):
+                continue
 
         if not recent:
             return False

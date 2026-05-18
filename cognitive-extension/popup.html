@@ -90,6 +90,84 @@
       <button id="btn-pause" class="btn btn-secondary" title="Pause/resume monitoring (Ctrl+Shift+P)">
         ⏸️ Pause
       </button>
+      <button id="btn-settings" class="btn btn-icon-only" title="Settings">⚙️</button>
+    </div>
+
+    <!-- Settings Panel -->
+    <div class="settings-panel" id="settings-panel" style="display:none;">
+      <div class="settings-header">
+        <h3>⚙️ Settings</h3>
+        <button id="btn-settings-close" class="btn-icon" title="Close settings">✕</button>
+      </div>
+      <div class="settings-body">
+        <!-- Intervention Toggles -->
+        <div class="settings-group">
+          <h4>Intervention Categories</h4>
+          <label class="toggle-row">
+            <span>Browser Notifications</span>
+            <input type="checkbox" id="toggle-browser" checked>
+            <span class="toggle-slider"></span>
+          </label>
+          <label class="toggle-row">
+            <span>Gmail</span>
+            <input type="checkbox" id="toggle-gmail" checked>
+            <span class="toggle-slider"></span>
+          </label>
+          <label class="toggle-row">
+            <span>Slack</span>
+            <input type="checkbox" id="toggle-slack" checked>
+            <span class="toggle-slider"></span>
+          </label>
+          <label class="toggle-row">
+            <span>Calendar</span>
+            <input type="checkbox" id="toggle-calendar" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <!-- Whitelist -->
+        <div class="settings-group">
+          <h4>Urgency Whitelist</h4>
+          <div class="whitelist-input">
+            <input type="text" id="whitelist-sender" placeholder="Add sender email...">
+            <button id="btn-add-sender" class="btn-small">Add</button>
+          </div>
+          <div class="whitelist-input">
+            <input type="text" id="whitelist-domain" placeholder="Add domain (e.g., company.com)...">
+            <button id="btn-add-domain" class="btn-small">Add</button>
+          </div>
+          <div id="whitelist-list" class="whitelist-list"></div>
+        </div>
+
+        <!-- Schedule Preferences -->
+        <div class="settings-group">
+          <h4>Schedule</h4>
+          <label class="setting-row">
+            <span>Work Hours Start</span>
+            <input type="number" id="work-start" min="0" max="23" value="8">
+          </label>
+          <label class="setting-row">
+            <span>Work Hours End</span>
+            <input type="number" id="work-end" min="0" max="23" value="18">
+          </label>
+          <label class="setting-row">
+            <span>Release Interval (min)</span>
+            <input type="number" id="release-interval" min="30" max="180" value="90">
+          </label>
+        </div>
+
+        <!-- Baseline Status -->
+        <div class="settings-group">
+          <h4>Baseline Collection</h4>
+          <div id="baseline-status" class="baseline-status">Checking...</div>
+        </div>
+
+        <!-- Circadian Rhythm -->
+        <div class="settings-group">
+          <h4>Circadian Rhythm</h4>
+          <div id="circadian-status" class="circadian-status">Analyzing...</div>
+        </div>
+      </div>
     </div>
 
     <!-- Learning overlay -->

@@ -2,6 +2,12 @@
 Cognitive Server - Adaptive Personalizer
 Online learning system that continuously improves based on user behavior.
 Tracks implicit feedback, adapts normalization, and learns optimal weights.
+
+Phase 5 features:
+- 24h baseline collection before enabling full intervention
+- Circadian rhythm detection (night owl vs early bird)
+- Weekly threshold recalibration (±5% adjustment)
+- Baseline progress tracking
 """
 
 import json
@@ -44,6 +50,9 @@ class AdaptivePersonalizer:
     3. Implicit feedback tracking (user actions inform accuracy)
     4. Time-of-day specific calibration
     5. Confidence-weighted predictions
+    6. Baseline collection mode (24h before full intervention)
+    7. Circadian rhythm classification (night owl / early bird / neutral)
+    8. Weekly threshold recalibration (±5% adjustment)
     """
 
     def __init__(self, config_path: str = None):
@@ -57,6 +66,18 @@ class AdaptivePersonalizer:
         self.thresholds = cognitiva.get("thresholds", dict(DEFAULT_THRESHOLDS))
         self.feature_weights = cognitiva.get("feature_weights", dict(DEFAULT_FEATURE_WEIGHTS))
         self.circadian_profile = cognitiva.get("circadian_profile", None)
+        
+        # Baseline collection state (Phase 5)
+        baseline_config = cognitiva.get("baseline", {})
+        self.baseline_start = baseline_config.get("start_time", None)
+        self.baseline_duration_hours = baseline_config.get("duration_hours", 24)
+        self.baseline_active = baseline_config.get("active", True)
+        
+        # Weekly recalibration state (Phase 5)
+        recal_config = cognitiva.get("recalibration", {})
+        self.last_recalibration = recal_config.get("last_time", None)
+        self.recalibration_interval_hours = recal_config.get("interval_hours", 168)  # 7 days
+        self.recalibration_adjustment_pct = recal_config.get("adjustment_pct", 5)
         
         # Rolling statistics for adaptive normalization (percentiles)
         self.feature_percentiles = cognitiva.get("feature_percentiles", {
@@ -104,11 +125,169 @@ class AdaptivePersonalizer:
             self.config["cognitive_load"]["circadian_profile"] = self.circadian_profile
             self.config["cognitive_load"]["feature_percentiles"] = self.feature_percentiles
             self.config["cognitive_load"]["time_weights"] = self.time_weights
+            self.config["cognitive_load"]["baseline"] = {
+                "start_time": self.baseline_start,
+                "duration_hours": self.baseline_duration_hours,
+                "active": self.baseline_active,
+            }
+            self.config["cognitive_load"]["recalibration"] = {
+                "last_time": self.last_recalibration,
+                "interval_hours": self.recalibration_interval_hours,
+                "adjustment_pct": self.recalibration_adjustment_pct,
+            }
             
             with open(self.config_path, "w") as f:
                 json.dump(self.config, f, indent=2)
         except Exception:
             pass
+
+    # ----- Baseline Collection (Phase 5) -----
+
+    def start_baseline_collection(self, duration_hours: int = 24):
+        """Start the 24h baseline collection period before enabling full intervention."""
+        self.baseline_start = datetime.now(timezone.utc).isoformat()
+        self.baseline_duration_hours = duration_hours
+        self.baseline_active = True
+        self._save_config()
+
+    def get_baseline_progress(self) -> Dict:
+        """Get baseline collection progress (0-1) and estimated completion time."""
+        if not self.baseline_active or not self.baseline_start:
+            return {"active": False, "progress": 1.0, "complete": True}
+
+        start = datetime.fromisoformat(self.baseline_start)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        elapsed = (now - start).total_seconds() / 3600
+        progress = min(1.0, elapsed / self.baseline_duration_hours)
+
+        if progress >= 1.0:
+            self.baseline_active = False
+            self._save_config()
+            return {"active": False, "progress": 1.0, "complete": True}
+
+        remaining_hours = self.baseline_duration_hours - elapsed
+        return {
+            "active": True,
+            "progress": round(progress, 3),
+            "complete": False,
+            "remaining_hours": round(remaining_hours, 1),
+            "started_at": self.baseline_start,
+        }
+
+    def is_baseline_complete(self) -> bool:
+        """Check if baseline collection is complete."""
+        progress = self.get_baseline_progress()
+        return progress["complete"]
+
+    # ----- Circadian Rhythm Classification (Phase 5) -----
+
+    def classify_circadian_rhythm(self) -> str:
+        """
+        Classify user's circadian rhythm pattern.
+        
+        Returns: "early_bird", "night_owl", "neutral"
+        """
+        if not self.circadian_profile or "hourly_avg" not in self.circadian_profile:
+            return "neutral"
+
+        hourly_avg = self.circadian_profile["hourly_avg"]
+
+        # Calculate average CLS for morning (6-10) vs evening (18-22)
+        morning_scores = []
+        evening_scores = []
+
+        for hour_str, score in hourly_avg.items():
+            try:
+                hour = int(hour_str)
+            except (ValueError, TypeError):
+                continue
+
+            if 6 <= hour <= 10:
+                morning_scores.append(score)
+            elif 18 <= hour <= 22:
+                evening_scores.append(score)
+
+        if not morning_scores or not evening_scores:
+            return "neutral"
+
+        morning_avg = sum(morning_scores) / len(morning_scores)
+        evening_avg = sum(evening_scores) / len(evening_scores)
+
+        # Lower CLS = better performance
+        # If morning CLS is significantly lower than evening → early bird
+        # If evening CLS is significantly lower than morning → night owl
+        diff = morning_avg - evening_avg
+
+        if diff < -5:
+            return "early_bird"
+        elif diff > 5:
+            return "night_owl"
+        else:
+            return "neutral"
+
+    # ----- Weekly Threshold Recalibration (Phase 5) -----
+
+    async def check_weekly_recalibration(self) -> Dict:
+        """
+        Check if weekly recalibration is due and apply ±5% adjustment.
+        
+        Analyzes the past week's CLS distribution and adjusts thresholds
+        to better match the user's actual patterns.
+        """
+        now = datetime.now(timezone.utc)
+
+        # Check if recalibration is due
+        if self.last_recalibration:
+            last = datetime.fromisoformat(self.last_recalibration)
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            elapsed = (now - last).total_seconds() / 3600
+            if elapsed < self.recalibration_interval_hours:
+                return {"recalibrated": False, "next_check_hours": round(self.recalibration_interval_hours - elapsed, 1)}
+
+        # Get past week's data
+        records = await sqlite_store.get_load_history(hours=168)
+        if len(records) < 100:
+            return {"recalibrated": False, "reason": "insufficient_data"}
+
+        # Compute percentile distribution
+        scores = [r["cls_score"] for r in records]
+        p25 = np.percentile(scores, 25)
+        p50 = np.percentile(scores, 50)
+        p75 = np.percentile(scores, 75)
+
+        # Adjust thresholds based on actual distribution
+        adjustment = self.recalibration_adjustment_pct / 100.0
+
+        # If median is higher than expected, user tends toward higher load → raise thresholds
+        # If median is lower, user tends toward lower load → lower thresholds
+        if p50 > 60:
+            # User is often in heavy/overloaded state → raise thresholds slightly
+            direction = 1
+        elif p50 < 30:
+            # User is often in restorative/light state → lower thresholds slightly
+            direction = -1
+        else:
+            direction = 0
+
+        if direction != 0:
+            for key in ["restorative", "light", "focused", "heavy"]:
+                current = self.thresholds[key]
+                delta = current * adjustment * direction
+                self.thresholds[key] = max(5, min(100, round(current + delta)))
+
+        self.last_recalibration = now.isoformat()
+        self._save_config()
+
+        return {
+            "recalibrated": True,
+            "direction": "up" if direction > 0 else "down" if direction < 0 else "none",
+            "new_thresholds": dict(self.thresholds),
+            "percentiles": {"p25": round(p25, 1), "p50": round(p50, 1), "p75": round(p75, 1)},
+        }
 
     # ----- Feature Normalization -----
 
@@ -376,6 +555,7 @@ class AdaptivePersonalizer:
 
     def get_stats(self) -> Dict:
         """Get personalization statistics."""
+        baseline = self.get_baseline_progress()
         return {
             "total_samples": sum(len(h) for h in self.feature_history.values()),
             "feedback_count": len(self.feedback_history),
@@ -383,6 +563,10 @@ class AdaptivePersonalizer:
             "confidence": self._get_confidence(),
             "is_learning": self.is_learning(),
             "circadian_profile": self.circadian_profile,
+            "circadian_rhythm": self.classify_circadian_rhythm(),
+            "baseline": baseline,
+            "thresholds": dict(self.thresholds),
+            "last_recalibration": self.last_recalibration,
         }
 
 

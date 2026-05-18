@@ -1,11 +1,11 @@
 {
-  "training_date": "2026-05-15T15:44:08.655574",
-  "epochs_trained": 211,
-  "train_mse": 19.74603843688965,
-  "val_mse": 21.15410614013672,
-  "test_mse": 21.84830665588379,
-  "test_mae": 3.6287617683410645,
-  "correlation": 0.9870893035552766,
+  "training_date": "2026-05-15T16:19:18.729060",
+  "epochs_trained": 256,
+  "train_mse": 20.707012176513672,
+  "val_mse": 20.241586685180664,
+  "test_mse": 23.049890518188477,
+  "test_mae": 3.7644600868225098,
+  "correlation": 0.9864826639234218,
   "model_target": "r>0.7 with self-reported focus",
   "architecture": {
     "input": 8,
@@ -24,6 +24,9 @@
       "path": "C:\\projects\\Cognitive\\cognitive_server\\ml\\model.clsmdl",
       "size_kb": 3.30078125
     },
-    "tflite": null
+    "tflite": {
+      "path": "C:\\projects\\Cognitive\\cognitive_server\\ml\\model.tflite",
+      "size_kb": 5.35546875
+    }
   }
 }

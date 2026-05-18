@@ -89,6 +89,14 @@ def _load_tflite(path):
         interp = Interpreter(model_path=path)
         interp.allocate_tensors()
         _tflite_interpreter = interp
+    except ImportError:
+        try:
+            import tensorflow.lite as tflite
+            interp = tflite.Interpreter(model_path=path)
+            interp.allocate_tensors()
+            _tflite_interpreter = interp
+        except Exception:
+            _tflite_interpreter = None
     except Exception:
         _tflite_interpreter = None
     return _tflite_interpreter
@@ -101,6 +109,7 @@ def _run_tflite(interp, features):
     interp.set_tensor(inp_d[0]['index'], inp)
     interp.invoke()
     score = float(interp.get_tensor(out[0]['index'])[0][0])
+    score = score * 100.0  # Scale sigmoid [0,1] to [0,100]
     score = max(0.0, min(100.0, score))
     conf = 1.0 - abs(score - 50) / 100.0
     if len(out) > 1:
@@ -158,11 +167,25 @@ def compute_confidence(features, cls):
 def compute_cls_model(features: dict):
     """
     Compute CLS using the best available model.
+    Priority: TFLite > .clsmdl > heuristic fallback.
     Returns (cls_score [0-100], confidence [0-1]).
     """
     mdir = os.path.dirname(os.path.abspath(__file__))
 
-    # 1. Try custom .clsmdl model
+    # 1. Try TFLite first (universal, cross-platform)
+    tflite = os.path.join(mdir, "model.tflite")
+    if os.path.exists(tflite):
+        try:
+            interp = _load_tflite(tflite)
+            if interp:
+                feat = [features[k] for k in
+                    ['kpm', 'switch_rate', 'scroll_entropy', 'mouse_entropy',
+                     'idle_ratio', 'tab_count', 'domain_switches', 'time_of_day']]
+                return _run_tflite(interp, feat)
+        except Exception as e:
+            print(f"[ml] TFLite error: {e}")
+
+    # 2. Try custom .clsmdl model
     custom = os.path.join(mdir, "model.clsmdl")
     if os.path.exists(custom):
         try:
@@ -177,19 +200,6 @@ def compute_cls_model(features: dict):
         except Exception as e:
             print(f"[ml] Custom model error: {e}")
 
-    # 2. Try TFLite
-    tflite = os.path.join(mdir, "model.tflite")
-    if os.path.exists(tflite):
-        try:
-            interp = _load_tflite(tflite)
-            if interp:
-                feat = [features[k] for k in
-                    ['kpm', 'switch_rate', 'scroll_entropy', 'mouse_entropy',
-                     'idle_ratio', 'tab_count', 'domain_switches', 'time_of_day']]
-                return _run_tflite(interp, feat)
-        except Exception as e:
-            print(f"[ml] TFLite error: {e}")
-
     # 3. Heuristic fallback
     cls = _heuristic(features)
     conf = _confidence(features, cls)
@@ -198,7 +208,8 @@ def compute_cls_model(features: dict):
 
 def get_model_info():
     mdir = os.path.dirname(os.path.abspath(__file__))
-    for name in ("model.clsmdl", "model.tflite"):
+    # Report in priority order (TFLite first)
+    for name in ("model.tflite", "model.clsmdl"):
         path = os.path.join(mdir, name)
         if os.path.exists(path):
             return {"type": name.split(".")[-1], "path": path,
